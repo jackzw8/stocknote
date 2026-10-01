@@ -1,0 +1,26 @@
+-- 月/季复盘总结（REQ-NOTE-06）。同一周期一篇，重复保存 REPLACE。
+CREATE TABLE review (
+    id TEXT NOT NULL PRIMARY KEY,
+    period_type TEXT NOT NULL,
+    period TEXT NOT NULL,
+    content TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX review_period_idx ON review(period_type, period);
+
+selectAll:
+SELECT * FROM review ORDER BY period DESC;
+
+selectByPeriod:
+SELECT * FROM review WHERE period_type = ? AND period = ?;
+
+upsert:
+INSERT OR REPLACE INTO review(id, period_type, period, content, updated_at)
+VALUES (?, ?, ?, ?, ?);
+
+deleteById:
+DELETE FROM review WHERE id = ?;
+
+countAll:
+SELECT count(*) FROM review;

@@ -1,0 +1,63 @@
+-- 迁移 v3 → v4：自选管理（REQ-TOOL-02）+ 月度复盘（REQ-NOTE-06）+ 交易质量评级（REQ-ANA-04）。
+-- 自选与复盘均为新表，trade 只加一列可空的 quality，旧行不受影响。
+
+-- 自选：仅存本机；移除只取消关注，不级联 trade/position（关键决策「自选不级联账本」）。
+-- tag_ids 同理，security_id 唯一约束防重复添加。
+CREATE TABLE watchlist (
+    id TEXT NOT NULL PRIMARY KEY,
+    security_id TEXT NOT NULL,
+    group_name TEXT NOT NULL DEFAULT '未分组',
+    sort_order INTEGER NOT NULL,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX watchlist_security_idx ON watchlist(security_id);
+
+-- 月/季复盘总结（REQ-NOTE-06）：period_type = MONTH | QUARTER，period = 2026-08 | 2026Q3。
+-- 同一周期只允许一篇，重复保存走 REPLACE。
+CREATE TABLE review (
+    id TEXT NOT NULL PRIMARY KEY,
+    period_type TEXT NOT NULL,
+    period TEXT NOT NULL,
+    content TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX review_period_idx ON review(period_type, period);
+
+-- 交易质量评级（REQ-ANA-04）：'GREAT'（神操作）/ 'BLUNDER'（昏招），null = 未评。
+ALTER TABLE trade ADD COLUMN quality TEXT;
+
+-- 回填演示样本，让「筛选查看两类」在升级后立即可见（正式用户数据不存在此问题）：
+-- 茅台 6/8 卖出（FIFO 配平 +3,600 的那笔）→ 神操作；宁德 4/8 追高买入 → 昏招。
+UPDATE trade SET quality = 'GREAT'
+WHERE side = 'SELL'
+  AND security_id IN (SELECT id FROM security WHERE symbol = 'sh600519');
+
+UPDATE trade SET quality = 'BLUNDER'
+WHERE side = 'BUY'
+  AND security_id IN (SELECT id FROM security WHERE symbol = 'sz300750');
+
+-- 内置策略标签（名字即 id —— tag_ids CSV 里存的就是这些名字，零迁移规范化）。
+-- INSERT OR IGNORE：与首启种子的 DemoData 保持同源，重复执行不报错。
+INSERT OR IGNORE INTO tag(id, name, category) VALUES
+    ('价值投资', '价值投资', 'STRATEGY'),
+    ('突破', '突破', 'STRATEGY'),
+    ('网格', '网格', 'STRATEGY'),
+    ('趋势', '趋势', 'STRATEGY'),
+    ('波段', '波段', 'STRATEGY'),
+    ('打板', '打板', 'STRATEGY');
+
+-- 演示自选（与界面原型 13 屏同源：茅台/腾讯置顶于「重点」组）。
+-- 子查询取 id，security 不存在时该行不插入（WHERE 过滤 NULL）。
+INSERT INTO watchlist(id, security_id, group_name, sort_order, pinned, created_at)
+SELECT 'wl_sh600519', id, '重点', 1, 1, '2026-09-14' FROM security WHERE symbol = 'sh600519';
+INSERT INTO watchlist(id, security_id, group_name, sort_order, pinned, created_at)
+SELECT 'wl_hk00700', id, '重点', 2, 1, '2026-09-14' FROM security WHERE symbol = 'hk00700';
+INSERT INTO watchlist(id, security_id, group_name, sort_order, pinned, created_at)
+SELECT 'wl_usAAPL', id, '未分组', 3, 0, '2026-09-14' FROM security WHERE symbol = 'usAAPL';
+INSERT INTO watchlist(id, security_id, group_name, sort_order, pinned, created_at)
+SELECT 'wl_sz000858', id, '未分组', 4, 0, '2026-09-14' FROM security WHERE symbol = 'sz000858';
+INSERT INTO watchlist(id, security_id, group_name, sort_order, pinned, created_at)
+SELECT 'wl_sh510300', id, '未分组', 5, 0, '2026-09-14' FROM security WHERE symbol = 'sh510300';

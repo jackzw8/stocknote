@@ -1,0 +1,18 @@
+-- 行情缓存。source 记录来源（tencent / sina / manual），用于降级展示与排查。
+CREATE TABLE quote (
+    symbol TEXT NOT NULL PRIMARY KEY,
+    price REAL NOT NULL,
+    prev_close REAL,
+    source TEXT NOT NULL,
+    updated_at INTEGER
+);
+
+selectAll:
+SELECT * FROM quote;
+
+selectBySymbol:
+SELECT * FROM quote WHERE symbol = ?;
+
+upsert:
+INSERT OR REPLACE INTO quote(symbol, price, prev_close, source, updated_at)
+VALUES (?, ?, ?, ?, ?);

@@ -1,0 +1,24 @@
+-- 交易笔记。每笔交易至多一条（1:1，以 transaction_id 关联）
+-- screenshot 为压缩后 BLOB（≤2MB），M0/M1 仅建表不接 UI，M2 接入
+CREATE TABLE note (
+    id TEXT NOT NULL PRIMARY KEY,
+    transaction_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    screenshot BLOB,
+    annotation TEXT
+);
+
+CREATE UNIQUE INDEX note_tx_idx ON note(transaction_id);
+
+selectByTransaction:
+SELECT * FROM note WHERE transaction_id = ?;
+
+upsert:
+INSERT OR REPLACE INTO note(id, transaction_id, content, screenshot, annotation)
+VALUES (?, ?, ?, ?, ?);
+
+deleteByTransaction:
+DELETE FROM note WHERE transaction_id = ?;
+
+countAll:
+SELECT count(*) FROM note;

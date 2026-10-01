@@ -1,0 +1,6 @@
+-- 迁移 v16 → v17（REQ-ACC-17 印花税，老周 2026-09-30）：
+-- ① trade 新增 stamp_duty 列（**原币金额**，与 fee 同口径存金额而不是税率）：
+--    A股买入 0、卖出万分之5；港股买卖各千分之1；ETF/场外基金/美股恒 0。
+--    默认 0 = 老数据不追溯（保证历史账本数字不被静默改写，与 fx_rate 的处理一致）。
+-- ② 无需回填：新列默认 0，历史交易的现金/成本口径保持不变。
+ALTER TABLE trade ADD COLUMN stamp_duty REAL NOT NULL DEFAULT 0;

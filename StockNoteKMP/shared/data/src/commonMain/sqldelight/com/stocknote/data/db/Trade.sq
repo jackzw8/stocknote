@@ -1,0 +1,75 @@
+-- 交易流水表：账本唯一事实源。
+-- Position 一律由本表全量重放推导，不允许单独写库。
+-- M3 新增：emotion / score / tag_ids（REQ-NOTE-02/04/05，策略分析的数据基础）
+-- M3.2 新增：quality（REQ-ANA-04 交易质量评级：'GREAT'神操作 / 'BLUNDER'昏招 / null 未评）
+-- M5 新增：fx_rate（REQ-ACC-15 成交日汇率，老周 2026-09-19）
+CREATE TABLE trade (
+    id TEXT NOT NULL PRIMARY KEY,
+    security_id TEXT NOT NULL,
+    side TEXT NOT NULL,
+    quantity REAL NOT NULL,
+    price REAL NOT NULL,
+    fee REAL NOT NULL DEFAULT 0,
+    -- 印花税（REQ-ACC-17，老周 2026-09-30）：**原币金额**（与 fee 同口径存金额、不存税率）。
+    -- 规则见 core/calc/StampDuty：A股买入 0 / 卖出万分之5；港股买卖各千分之1；ETF/基金/美股恒 0。
+    -- 默认 0 = 本列上线前的历史数据（不追溯，保证老账本数字不被静默改写）。
+    stamp_duty REAL NOT NULL DEFAULT 0,
+    trade_date TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    note TEXT,
+    emotion TEXT,
+    score INTEGER,
+    tag_ids TEXT,
+    quality TEXT,
+    -- 成交日汇率（**原币 → CNY**，如港元 0.8536）。
+    -- NULL 的两种含义：① A股等本位币交易（无需折算）；② 本列上线前的历史数据。
+    -- NULL 时折算回退「最新汇率」，**不追溯**——保证老账本数字不被静默改写。
+    fx_rate REAL
+);
+
+CREATE INDEX trade_security_idx ON trade(security_id, trade_date, seq);
+
+selectAll:
+SELECT * FROM trade ORDER BY trade_date, seq;
+
+/** 按主键取一笔（M1 修复，2026-09-28）：编辑/删除交易只需一行，此前用 selectAll 全表加载再 firstOrNull。 */
+selectById:
+SELECT * FROM trade WHERE id = ?;
+
+selectBySecurity:
+SELECT * FROM trade WHERE security_id = ? ORDER BY trade_date DESC, seq DESC;
+
+selectByDateRange:
+SELECT * FROM trade WHERE trade_date >= ? AND trade_date <= ? ORDER BY trade_date, seq;
+
+upsert:
+INSERT OR REPLACE INTO trade(id, security_id, side, quantity, price, fee, stamp_duty, trade_date, seq, note, emotion, score, tag_ids, quality, fx_rate)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateFxRate:
+UPDATE trade SET fx_rate = ? WHERE id = ?;
+
+updateQuality:
+UPDATE trade SET quality = ? WHERE id = ?;
+
+updateTagIds:
+UPDATE trade SET tag_ids = ? WHERE id = ?;
+
+selectQualityCounts:
+SELECT quality, count(*) AS cnt FROM trade WHERE quality IS NOT NULL GROUP BY quality;
+
+deleteById:
+DELETE FROM trade WHERE id = ?;
+
+deleteBySecurity:
+DELETE FROM trade WHERE security_id = ?;
+
+-- 清空全部交易流水（老周 2026-09-30：设置页「清空所有标的」用；配套清 note / trade_photo）
+deleteAll:
+DELETE FROM trade;
+
+nextSeq:
+SELECT COALESCE(MAX(seq), 0) + 1 FROM trade;
+
+countAll:
+SELECT count(*) FROM trade;

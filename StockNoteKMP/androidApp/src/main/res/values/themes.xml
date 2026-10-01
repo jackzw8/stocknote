@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 用系统 Material 主题而非 AppCompat，外壳不依赖 AppCompat，
+         界面全部由 Compose 绘制，主题只负责窗口背景与状态栏。 -->
+    <style name="Theme.StockNote" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#F2F4F8</item>
+        <item name="android:statusBarColor">#F2F4F8</item>
+        <item name="android:navigationBarColor">#FFFFFF</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+    <!-- 启动图主题（老周 2026-09-17）：窗口一创建即显示启动图，消除冷启动白屏；
+         Compose 首帧后 SplashOverlay 显示同一张图无缝衔接，数据就绪后进入主页。 -->
+    <style name="Theme.StockNote.Splash" parent="Theme.StockNote">
+        <item name="android:windowBackground">@drawable/splash_window</item>
+        <item name="android:statusBarColor">#170C0A</item>
+        <item name="android:navigationBarColor">#170C0A</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

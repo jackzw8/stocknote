@@ -1,0 +1,22 @@
+-- 迁移 v7 → v8：新增交易计划表（老周 2026-09-19，REQ-PLAN-01）。
+-- 只加表，不动任何既有数据。
+--
+-- ⚠️ 与需求文档 §9 的写法不同：文档写成「Schema.version = 6 → 7」，
+-- 但 6.sqm 已经是 v6→v7（2026-09-17 加 trade_photo），当前版本实为 **7**，
+-- 所以本次迁移是 7.sqm（v7 → v8）。
+CREATE TABLE trade_plan (
+    id TEXT NOT NULL PRIMARY KEY,
+    security_id TEXT NOT NULL,
+    side TEXT NOT NULL,
+    target_price REAL NOT NULL,
+    discount REAL,
+    planned_price REAL NOT NULL,
+    quantity REAL NOT NULL,
+    fee_rate REAL NOT NULL DEFAULT 0,
+    note TEXT NOT NULL DEFAULT '',
+    tag_ids TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX trade_plan_security_idx ON trade_plan(security_id);

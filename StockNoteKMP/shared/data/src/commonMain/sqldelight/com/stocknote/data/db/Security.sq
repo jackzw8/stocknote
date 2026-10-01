@@ -1,0 +1,57 @@
+CREATE TABLE security (
+    id TEXT NOT NULL PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    name TEXT NOT NULL,
+    market TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    industry TEXT,
+    is_cash_equivalent INTEGER NOT NULL DEFAULT 0,
+    exclude_from_stats INTEGER NOT NULL DEFAULT 0,
+    -- 每手股数（老周 2026-09-28）：港股从腾讯行情第 61 字段取真实值（如 hk00941=500、hk00700=100）；
+    -- A股/ETF 恒为 100；美股/场外基金为 1。NULL = 尚未取到 → 由 LotRule 按市场兜底。
+    lot_size INTEGER
+);
+
+CREATE UNIQUE INDEX security_symbol_idx ON security(symbol);
+
+selectAll:
+SELECT * FROM security ORDER BY name;
+
+selectById:
+SELECT * FROM security WHERE id = ?;
+
+selectBySymbol:
+SELECT * FROM security WHERE symbol = ?;
+
+-- ⚠️ 轻微-5 修复（2026-09-28）：加 `ESCAPE '\'` —— 用户输入 `%` 会命中全部、`_` 被当单字符通配；
+-- Kotlin 侧统一转义后再传入，这里声明转义符才能生效。
+search:
+SELECT * FROM security
+WHERE name LIKE '%' || ? || '%' ESCAPE '\' OR symbol LIKE '%' || ? || '%' ESCAPE '\'
+ORDER BY name
+LIMIT 30;
+
+upsert:
+INSERT OR REPLACE INTO security(id, symbol, name, market, currency, industry, is_cash_equivalent, exclude_from_stats, lot_size)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+/** 只改「是否计入统计与分析」开关（场外基金备忘账，老周 2026-09-20）。 */
+setExcludeFromStats:
+UPDATE security SET exclude_from_stats = ? WHERE id = ?;
+
+/** 只更新「每手股数」（老周 2026-09-28）：行情刷新时从腾讯接口取到后回写，不动其它字段。 */
+setLotSize:
+UPDATE security SET lot_size = ? WHERE id = ?;
+
+-- ⚠️ **危险 API**（M15，2026-09-27）：只删标的行，会把它在 trade / dividend / watchlist /
+-- trade_plan 里的引用留成**孤儿** —— 而重放是**以 securities 列表驱动**的，孤儿流水既不进持仓、
+-- 也不进统计，等于**静默从账本消失**。删除标的请走 `PortfolioRepository.deleteSecurity()`（级联清理）。
+deleteAll:
+DELETE FROM security;
+
+-- M15 方案 2：按 id 删除单个标的；**调用方必须先用 deleteSecurity 做级联清理**。
+deleteById:
+DELETE FROM security WHERE id = ?;
+
+countAll:
+SELECT count(*) FROM security;

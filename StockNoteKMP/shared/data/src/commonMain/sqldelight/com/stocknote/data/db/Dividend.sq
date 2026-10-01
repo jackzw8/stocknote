@@ -1,0 +1,38 @@
+-- 分红送股事件。成本调整规则见技术说明书 5.2（现金分红降成本、送股摊薄成本、配股加成本）
+CREATE TABLE dividend (
+    id TEXT NOT NULL PRIMARY KEY,
+    security_id TEXT NOT NULL,
+    ex_date TEXT NOT NULL,
+    type TEXT NOT NULL,
+    quantity REAL NOT NULL DEFAULT 0,
+    per_share REAL NOT NULL DEFAULT 0,
+    bonus_shares REAL NOT NULL DEFAULT 0,
+    rights_price REAL NOT NULL DEFAULT 0,
+    fx_rate REAL NOT NULL DEFAULT 1.0
+);
+
+CREATE INDEX dividend_security_idx ON dividend(security_id, ex_date);
+
+selectAll:
+SELECT * FROM dividend ORDER BY ex_date, id;
+
+selectBySecurity:
+SELECT * FROM dividend WHERE security_id = ? ORDER BY ex_date;
+
+upsert:
+INSERT OR REPLACE INTO dividend(id, security_id, ex_date, type, quantity, per_share, bonus_shares, rights_price, fx_rate)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- M15 方案 2（2026-09-27）：删标的时级联清理，避免留下孤儿分红
+deleteBySecurity:
+DELETE FROM dividend WHERE security_id = ?;
+
+-- 清空全部分红送股（老周 2026-09-30：设置页「清空所有标的」用）
+deleteAll:
+DELETE FROM dividend;
+
+deleteById:
+DELETE FROM dividend WHERE id = ?;
+
+countAll:
+SELECT count(*) FROM dividend;

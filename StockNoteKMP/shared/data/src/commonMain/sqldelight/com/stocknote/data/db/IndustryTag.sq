@@ -1,0 +1,20 @@
+-- 行业标签库：手动维护 + 首次启动联网初始化（REQ-TOOL-03）
+CREATE TABLE industry_tag (
+    id TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'MANUAL'
+);
+
+CREATE UNIQUE INDEX industry_tag_name_idx ON industry_tag(name);
+
+selectAll:
+SELECT * FROM industry_tag ORDER BY name;
+
+selectByName:
+SELECT * FROM industry_tag WHERE name = ?;
+
+upsert:
+INSERT OR REPLACE INTO industry_tag(id, name, source) VALUES (?, ?, ?);
+
+deleteById:
+DELETE FROM industry_tag WHERE id = ?;

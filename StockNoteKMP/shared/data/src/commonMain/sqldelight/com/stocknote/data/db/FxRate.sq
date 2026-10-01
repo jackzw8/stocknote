@@ -1,0 +1,59 @@
+-- 汇率表（REQ-ACC-05 / 5.7）：复合主键 (currency, effective_date)。
+-- 查询口径：每币种取 effective_date 最大的那条（<= 计算基准日）。
+CREATE TABLE fx_rate (
+    currency TEXT NOT NULL,
+    effective_date TEXT NOT NULL,
+    rate REAL NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (currency, effective_date)
+);
+
+selectAll:
+SELECT * FROM fx_rate ORDER BY currency, effective_date;
+
+-- L1 修复（2026-09-27）：改为**显式子查询**取每币种的最新一条。
+-- ⚠️ 此前是 `SELECT currency, rate, MAX(effective_date) ... GROUP BY currency` ——
+-- 它依赖 SQLite 的"min/max 聚合时裸列取自极值行"这一**特例**（SQL 标准并不保证），
+-- 当前结果正确，但**将来一旦再加一个聚合函数（如 AVG）就会静默取到错误的 rate**。
+-- 注意：参数出现两次（外层与子查询各一），调用方传同一个基准日即可。
+latestPerCurrency:
+SELECT f.currency, f.rate, f.effective_date AS eff
+FROM fx_rate f
+WHERE f.effective_date <= ?
+  AND f.effective_date = (
+      SELECT MAX(f2.effective_date)
+      FROM fx_rate f2
+      WHERE f2.currency = f.currency AND f2.effective_date <= ?
+  );
+
+upsert:
+INSERT OR REPLACE INTO fx_rate(currency, effective_date, rate, updated_at)
+VALUES (?, ?, ?, ?);
+
+deleteById:
+DELETE FROM fx_rate WHERE currency = ? AND effective_date = ?;
+
+-- 汇率记录只保留最近 N 天（老周 2026-09-18）：删掉生效日早于给定日期的记录。
+-- 取值始终用最新一条（latestPerCurrency），更早的历史没有用途。
+deleteOlderThan:
+DELETE FROM fx_rate WHERE effective_date < ?;
+
+-- 历史收盘价缓存（逐日估值数据底座）
+CREATE TABLE daily_close (
+    symbol TEXT NOT NULL,
+    date TEXT NOT NULL,
+    close REAL NOT NULL,
+    PRIMARY KEY (symbol, date)
+);
+
+upsertClose:
+INSERT OR REPLACE INTO daily_close(symbol, date, close) VALUES (?, ?, ?);
+
+selectClosesBySymbol:
+SELECT * FROM daily_close WHERE symbol = ? ORDER BY date;
+
+selectCloseOn:
+SELECT close FROM daily_close WHERE symbol = ? AND date = ?;
+
+countDailyClose:
+SELECT count(*) FROM daily_close;

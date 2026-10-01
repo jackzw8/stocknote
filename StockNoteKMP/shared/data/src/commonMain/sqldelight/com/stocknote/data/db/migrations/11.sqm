@@ -1,0 +1,35 @@
+-- 迁移 v11 → v12：交易计划的时间字段统一成 **yyyy-MM-dd**（老周 2026-09-21）。
+--
+-- 为什么改：`created_at` / `updated_at` 此前存的是**纪元毫秒字符串**（如 1758432000000），
+-- 而演示数据里又是 ISO 日期时间（2026-08-25T10:00:00），两种格式混在一列里：
+--   ① 列表「最近创建」按字符串倒序 → 与 trade_date 的 yyyy-MM-dd 混排会串；
+--   ② CSV 导出「创建日期」列写出这些值后，再导入会被 `CivilDate.parseIso` 判非法而**跳过整行**。
+--
+-- 处理规则（只动长度 > 10 的历史值，已经是 yyyy-MM-dd 的保持原样）：
+--   · 纯数字（≥13 位，纪元毫秒）→ strftime 转成本地日期；
+--   · 其余长值（ISO 日期时间）→ 取前 10 位。
+-- 转不出来时兜底为前 10 位，绝不写 NULL（该列 NOT NULL）。
+--
+-- ⚠️ **L11（2026-09-27 记录，刻意不改）**：位于 `> 10` 与 `< 13` 之间的**纯数字**值
+-- （即 11~12 位，例如 10 位纪元**秒**前面多了个 0）会落进 ELSE 分支被 `substr(1,10)` 截成
+-- **非法日期**（如 `1758432000` 这种"看似日期实则不是"的字符串）。
+-- 当前判断：历史值只会是 13 位纪元毫秒（所以实际不会触发），但**这一点未被证实**。
+-- 不改的原因与 5.sqm 相同：迁移**已随版本发布**，改它对已升级用户无效，还会引入
+-- "同版本号不同迁移内容"的隐患；真要兜底应在**运行时**做数据自检。
+UPDATE trade_plan
+SET created_at = CASE
+        WHEN length(created_at) >= 13 AND created_at NOT GLOB '*[^0-9]*'
+            THEN COALESCE(strftime('%Y-%m-%d', CAST(created_at AS INTEGER) / 1000, 'unixepoch'),
+                          substr(created_at, 1, 10))
+        ELSE substr(created_at, 1, 10)
+    END
+WHERE length(created_at) > 10;
+
+UPDATE trade_plan
+SET updated_at = CASE
+        WHEN length(updated_at) >= 13 AND updated_at NOT GLOB '*[^0-9]*'
+            THEN COALESCE(strftime('%Y-%m-%d', CAST(updated_at AS INTEGER) / 1000, 'unixepoch'),
+                          substr(updated_at, 1, 10))
+        ELSE substr(updated_at, 1, 10)
+    END
+WHERE length(updated_at) > 10;

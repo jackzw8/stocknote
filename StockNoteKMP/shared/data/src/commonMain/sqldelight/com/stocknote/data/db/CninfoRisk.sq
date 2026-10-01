@@ -1,0 +1,38 @@
+-- 巨潮资讯「诉讼 / 担保」本地快照（老周 2026-09-24）
+--
+-- 用途：个股扫雷的「涉诉金额/净资产」（M8a）与「对外担保/净资产」（M8b）两项
+--       **只从本表读**（快、离线可用）。
+-- 数据来源：巨潮专题统计接口（诉讼 p_sysapi1055 / 担保 p_sysapi1054），
+--       由「设置 → 诉讼担保查询」**手工拉取**全市场记录后**全量覆盖**写入本表。
+-- ⚠️ 那两个接口需要动态鉴权头 Accept-Enckey（AES-128-CBC，见 core/calc/Aes128.kt），
+--    且返回**全市场**记录（体积大）—— 所以不做成每次扫雷都拉，而是手工同步一次、长期复用。
+--
+-- 口径说明：
+--   sue_amount 诉讼金额（万元，巨潮 F002N）；诉讼占比需 ÷ 该股归母净资产，由扫雷时计算；
+--   gte_ratio  对外担保/净资产（%，巨潮 F003N 直接给，无需再算）。
+CREATE TABLE cninfo_risk (
+    code       TEXT NOT NULL PRIMARY KEY,   -- 6 位股票代码（巨潮 SECCODE）
+    name       TEXT NOT NULL DEFAULT '',
+    sue_count  INTEGER NOT NULL DEFAULT 0,  -- 诉讼次数
+    sue_amount REAL,                        -- 诉讼金额（万元）
+    gte_count  INTEGER NOT NULL DEFAULT 0,  -- 担保笔数
+    gte_ratio  REAL,                        -- 对外担保/净资产（%）
+    updated_at TEXT NOT NULL
+);
+
+selectByCode:
+SELECT * FROM cninfo_risk WHERE code = ?;
+
+countAll:
+SELECT count(*) FROM cninfo_risk;
+
+-- 最后同步日期（用 ORDER BY + LIMIT 1 而非 MAX()：SQLDelight 对聚合会生成行类型，调用侧更啰嗦）
+latestUpdatedAt:
+SELECT updated_at FROM cninfo_risk ORDER BY updated_at DESC LIMIT 1;
+
+upsert:
+INSERT OR REPLACE INTO cninfo_risk(code, name, sue_count, sue_amount, gte_count, gte_ratio, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+deleteAll:
+DELETE FROM cninfo_risk;

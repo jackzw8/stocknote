@@ -1,0 +1,14 @@
+-- 迁移 v13 → v14：新增 cninfo_risk（巨潮「诉讼 / 担保」本地快照，老周 2026-09-24）。
+--
+-- 背景：个股扫雷的「涉诉金额/净资产」「对外担保/净资产」两项依赖巨潮接口，
+--       而该接口①需要动态鉴权头（AES-128-CBC）②返回**全市场**记录、体积大。
+-- 设计：改为**设置页手工拉取一次 → 全量写本表**，扫雷时**只读本地**（秒出、离线可用）。
+CREATE TABLE cninfo_risk (
+    code       TEXT NOT NULL PRIMARY KEY,
+    name       TEXT NOT NULL DEFAULT '',
+    sue_count  INTEGER NOT NULL DEFAULT 0,
+    sue_amount REAL,
+    gte_count  INTEGER NOT NULL DEFAULT 0,
+    gte_ratio  REAL,
+    updated_at TEXT NOT NULL
+);

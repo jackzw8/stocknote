@@ -1,0 +1,57 @@
+-- 自选（REQ-TOOL-02）。security_id 唯一：重复添加被数据库层面拦截。
+-- 移除仅取消关注，绝不级联交易/持仓/笔记（「自选不级联账本」）。
+--
+-- target_price（老周 2026-09-21）：我给这只票定的**目标价**，可空（NULL = 还没设）。
+--   它同时是「交易计划-目标价」的来源与去处：计划表单可以取用/回写它。
+CREATE TABLE watchlist (
+    id TEXT NOT NULL PRIMARY KEY,
+    security_id TEXT NOT NULL,
+    group_name TEXT NOT NULL DEFAULT '未分组',
+    sort_order INTEGER NOT NULL,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    target_price REAL
+);
+
+CREATE UNIQUE INDEX watchlist_security_idx ON watchlist(security_id);
+
+-- 置顶固定最前，其余按手动顺序；同序按加入时间兜底
+selectAll:
+SELECT * FROM watchlist ORDER BY pinned DESC, sort_order, created_at;
+
+selectBySecurity:
+SELECT * FROM watchlist WHERE security_id = ?;
+
+selectById:
+SELECT * FROM watchlist WHERE id = ?;
+
+-- ⚠️ 轻微-7 修复（2026-09-28）：补 `target_price` —— INSERT OR REPLACE 是**整行替换**，
+-- 此前缺这一列，若复用已有 id（调用点当前都先判重，暂未触发），目标价会被**静默清空**。
+insertItem:
+INSERT OR REPLACE INTO watchlist(id, security_id, group_name, sort_order, pinned, created_at, target_price)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+updateGroup:
+UPDATE watchlist SET group_name = ? WHERE id = ?;
+
+updatePinned:
+UPDATE watchlist SET pinned = ? WHERE id = ?;
+
+updateSortOrder:
+UPDATE watchlist SET sort_order = ? WHERE id = ?;
+
+-- 目标价：设值 / 清除（NULL）都用它
+updateTargetPrice:
+UPDATE watchlist SET target_price = ? WHERE id = ?;
+
+updateTargetPriceBySecurity:
+UPDATE watchlist SET target_price = ? WHERE security_id = ?;
+
+deleteById:
+DELETE FROM watchlist WHERE id = ?;
+
+deleteBySecurity:
+DELETE FROM watchlist WHERE security_id = ?;
+
+countAll:
+SELECT count(*) FROM watchlist;

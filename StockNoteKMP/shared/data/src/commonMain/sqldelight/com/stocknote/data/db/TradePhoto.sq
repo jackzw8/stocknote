@@ -1,0 +1,25 @@
+-- 交易截图（老周 2026-09-17，REQ-ACC-11）：一笔交易最多 1 张截图，BLOB 存库（应用内部加密库）。
+-- 说明：截图**不参与加密备份**（备份是 SQL 文本 dump，BLOB 需要额外编码；本期从简，UI 已提示）。
+
+CREATE TABLE trade_photo (
+    tx_id      TEXT NOT NULL PRIMARY KEY,
+    mime       TEXT NOT NULL,
+    bytes      BLOB NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+selectByTx:
+SELECT * FROM trade_photo WHERE tx_id = ?;
+
+hasPhoto:
+SELECT COUNT(*) FROM trade_photo WHERE tx_id = ?;
+
+upsert:
+INSERT OR REPLACE INTO trade_photo(tx_id, mime, bytes, created_at)
+VALUES (?, ?, ?, ?);
+
+deleteByTx:
+DELETE FROM trade_photo WHERE tx_id = ?;
+
+countAll:
+SELECT COUNT(*) FROM trade_photo;

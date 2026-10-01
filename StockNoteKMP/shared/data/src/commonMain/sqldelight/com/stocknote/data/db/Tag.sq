@@ -1,0 +1,15 @@
+-- 策略/情绪标签（多对多，M0/M1 建表，M2 接 UI）
+CREATE TABLE tag (
+    id TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'STRATEGY'
+);
+
+selectAll:
+SELECT * FROM tag ORDER BY category, name;
+
+upsert:
+INSERT OR REPLACE INTO tag(id, name, category) VALUES (?, ?, ?);
+
+deleteById:
+DELETE FROM tag WHERE id = ?;

@@ -1,0 +1,56 @@
+-- 出入金（带日期供 XIRR；账户维度，与 Security 无关）
+-- 口径约定（与技术说明书 4.2 一致）：
+--   amount_orig = 原币金额
+--   fx_rate     = 发生日汇率快照（原币 → CNY）
+--   amount_base = 本位币金额，**固定 CNY 口径**（= amount_orig × fx_rate），
+--                 使 IRR 不随用户切换本位币而失效
+CREATE TABLE cash_flow (
+    id TEXT NOT NULL PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    flow_date TEXT NOT NULL,
+    type TEXT NOT NULL,
+    amount_orig REAL NOT NULL,
+    currency TEXT NOT NULL,
+    fx_rate REAL NOT NULL DEFAULT 1.0,
+    amount_base REAL NOT NULL,
+    note TEXT
+);
+
+CREATE INDEX cash_flow_date_idx ON cash_flow(flow_date);
+
+selectAll:
+SELECT * FROM cash_flow ORDER BY flow_date DESC, id;
+
+/** 按主键取一笔（M1 修复，2026-09-28）：编辑出入金只需一行，此前全表加载再 firstOrNull。 */
+selectById:
+SELECT * FROM cash_flow WHERE id = ?;
+
+selectByAccount:
+SELECT * FROM cash_flow WHERE account_id = ? ORDER BY flow_date DESC;
+
+upsert:
+INSERT OR REPLACE INTO cash_flow(id, account_id, flow_date, type, amount_orig, currency, fx_rate, amount_base, note)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- 修改出入金流水（老周 2026-09-16）：日期/类型/金额/币种/汇率/备注
+--
+-- ⚠️ **H4 修复（2026-09-28）**：原语句只更新 `flow_date / type / amount_orig / amount_base / note`，
+-- **漏了 `account_id` / `currency` / `fx_rate`** —— 而唯一调用点又把 `amount_base` 直接写成原币金额，
+-- 于是编辑任意一笔**外币流水**（哪怕只改个日期）都会把本位币金额**改成原币数字**：
+-- 1 万港元入金的本位币从 8555 被写成 10000 → 可用现金虚增 1445，XIRR 与累计投入全部跟着偏。
+-- 现在三列都进 UPDATE，调用方从库里读原行把币种与汇率**原样带回**，本位币金额按汇率重算。
+updateFlow:
+UPDATE cash_flow
+SET flow_date = ?, type = ?, amount_orig = ?, amount_base = ?, note = ?,
+    account_id = ?, currency = ?, fx_rate = ?
+WHERE id = ?;
+
+deleteById:
+DELETE FROM cash_flow WHERE id = ?;
+
+-- 清空全部出入金（老周 2026-09-30：设置页「清空所有标的」用；配套把 account.cash 归零）
+deleteAll:
+DELETE FROM cash_flow;
+
+countAll:
+SELECT count(*) FROM cash_flow;

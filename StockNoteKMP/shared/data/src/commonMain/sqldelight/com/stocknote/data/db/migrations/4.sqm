@@ -1,0 +1,26 @@
+-- 迁移 v4 → v5（M4 数据真值）：
+-- ① fx_rate 汇率表（REQ-ACC-05 / 5.7）：复合主键 (currency, effective_date)，
+--    替换 M0 的固定汇率（0.92/7.2 退化为查不到时的兜底）。
+-- ② daily_close 历史收盘缓存（逐日估值 / 资产曲线的数据底座）：
+--    腾讯 K 线按需拉取后落库，避免重复请求，离线可用。
+
+CREATE TABLE fx_rate (
+    currency TEXT NOT NULL,
+    effective_date TEXT NOT NULL,
+    rate REAL NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (currency, effective_date)
+);
+
+CREATE TABLE daily_close (
+    symbol TEXT NOT NULL,
+    date TEXT NOT NULL,
+    close REAL NOT NULL,
+    PRIMARY KEY (symbol, date)
+);
+
+-- 种子：当前固定汇率作为 2026-09-14 的生效值（老数据平滑过渡到真汇率体系）
+INSERT OR IGNORE INTO fx_rate(currency, effective_date, rate, updated_at)
+VALUES
+    ('HKD', '2026-09-14', 0.92, '2026-09-14'),
+    ('USD', '2026-09-14', 7.2, '2026-09-14');

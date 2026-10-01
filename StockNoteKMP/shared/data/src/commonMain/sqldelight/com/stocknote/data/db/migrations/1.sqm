@@ -1,0 +1,51 @@
+-- 迁移 v1 → v2：补齐记账闭环所需的表。
+-- v1（M0 交付版）只有 security / trade / account / quote / app_setting 五张表。
+-- 本迁移只做「新增表」，不改不删任何 v1 列，因此已装机的 v1 数据零损失。
+
+CREATE TABLE cash_flow (
+    id TEXT NOT NULL PRIMARY KEY,
+    account_id TEXT NOT NULL,
+    flow_date TEXT NOT NULL,
+    type TEXT NOT NULL,
+    amount_orig REAL NOT NULL,
+    currency TEXT NOT NULL,
+    fx_rate REAL NOT NULL DEFAULT 1.0,
+    amount_base REAL NOT NULL,
+    note TEXT
+);
+CREATE INDEX cash_flow_date_idx ON cash_flow(flow_date);
+
+CREATE TABLE dividend (
+    id TEXT NOT NULL PRIMARY KEY,
+    security_id TEXT NOT NULL,
+    ex_date TEXT NOT NULL,
+    type TEXT NOT NULL,
+    quantity REAL NOT NULL DEFAULT 0,
+    per_share REAL NOT NULL DEFAULT 0,
+    bonus_shares REAL NOT NULL DEFAULT 0,
+    rights_price REAL NOT NULL DEFAULT 0,
+    fx_rate REAL NOT NULL DEFAULT 1.0
+);
+CREATE INDEX dividend_security_idx ON dividend(security_id, ex_date);
+
+CREATE TABLE note (
+    id TEXT NOT NULL PRIMARY KEY,
+    transaction_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    screenshot BLOB,
+    annotation TEXT
+);
+CREATE UNIQUE INDEX note_tx_idx ON note(transaction_id);
+
+CREATE TABLE tag (
+    id TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'STRATEGY'
+);
+
+CREATE TABLE industry_tag (
+    id TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'MANUAL'
+);
+CREATE UNIQUE INDEX industry_tag_name_idx ON industry_tag(name);

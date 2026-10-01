@@ -1,0 +1,90 @@
+# XcodeGen 配置 —— 在 macOS 上生成 Xcode 工程
+#
+# ⚠️ 本文件**未经验证**：构建机是 Windows，无法为 Apple 平台编译 Kotlin/Native。
+# 首次在 macOS 上执行前，请先读同目录 README.md 的「首次在 macOS 上开工」一节。
+#
+# 用法：
+#   brew install xcodegen
+#   cd iosApp && xcodegen generate
+
+name: StockNoteApp
+
+options:
+  bundleIdPrefix: com.stocknote
+  deploymentTarget:
+    iOS: "14.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+    # 共享 framework 由 Gradle 产出，路径遵循 KMP 官方约定
+    FRAMEWORK_SEARCH_PATHS:
+      - "$(inherited)"
+      - "$(SRCROOT)/../shared/feature/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)"
+    OTHER_LDFLAGS:
+      - "$(inherited)"
+      - "-framework"
+      - "SharedUI"
+      # ⚠️ 2026-10-01：SQLDelight 的 native driver（co.touchlab:sqliter）在链接/运行时
+      #   要调用**系统 libsqlite3** —— Kotlin/Native **不会**把它打进 framework，
+      #   而我们是「直接集成」（非 CocoaPods），所以**必须在这里显式链接**。
+      #   否则 Xcode 归档时报（CI 实测）：
+      #     "_sqlite3_step", referenced from:
+      #         _kfun:co.touchlab.sqliter.interop.ActualSqliteStatement#step(){} in SharedUI.framework.o
+      #     ld: symbol(s) not found for architecture arm64
+      #     ** ARCHIVE FAILED **
+      - "-lsqlite3"
+
+targets:
+  StockNoteApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: iosApp
+        # ⚠️ 别把 Info.plist 当**资源**打进 bundle（会与 INFOPLIST_FILE 打架）
+        excludes:
+          - "Info.plist"
+    # ⚠️⚠️ 2026-10-01：**这里原本是 `info: { path: iosApp/Info.plist }`，那是真机闪退修复"失效"的根因。**
+    #
+    # XcodeGen 的 `info:` 段语义是「**让 XcodeGen 生成一份 Info.plist**」（不是"使用仓库里这份"）——
+    # 它自己写了一份到该路径，把仓库里那份带自定义键的文件**架空**了。
+    # 实证（解析线上 IPA 里的 Info.plist）：21 个键**全是 Xcode 注入的**
+    # （DTCompiler / DTSDKName / DTXcode …），而仓库里那四项**一个都不在**：
+    #   CFBundleDisplayName（股票交易笔记）、UILaunchScreen、
+    #   **CADisableMinimumFrameDurationOnPhone（CMP 1.7+ 启动强校验，缺它必崩）**、UIFileSharingEnabled；
+    # 版本号也退回默认的 **1.0 / 1**。
+    # ⇒ 于是"改了 Info.plist 却没生效"，白跑两轮 CI、真机反复闪退。
+    #
+    # 正确做法：**删掉 `info:` 段**，改用构建设置 `INFOPLIST_FILE` 直接指向仓库里的文件
+    # （路径基准 = SRCROOT = 生成的 .xcodeproj 所在目录 = StockNoteKMP/iosApp）。
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.stocknote.app
+        PRODUCT_NAME: StockNoteApp
+        # ✅ 用仓库里的 Info.plist（不要走 XcodeGen 的 info 生成逻辑）
+        INFOPLIST_FILE: iosApp/Info.plist
+        # ⚠️ 必须为 NO：否则 Xcode 会生成一份默认的，同样会把 INFOPLIST_FILE 架空
+        GENERATE_INFOPLIST_FILE: "NO"
+        CODE_SIGN_STYLE: Automatic
+        # ⚠️ 必须显式声明设备族：XcodeGen 默认按平台只给 iPhone（1），
+        # 少了 iPad（2）装到 iPad 上会以"手机 App 兼容模式"运行、不分屏也不适配。
+        # 老周 2026-09-30 明确要求「iPhone 和 iPad 都要能跑」。
+        TARGETED_DEVICE_FAMILY: "1,2"
+    preBuildScripts:
+      # 关键一步：让 Gradle 编译并嵌入 Kotlin framework（含 Compose UI）
+      #
+      # ⚠️ 2026-10-01：**必须加 `--no-daemon`**（CI 实测踩坑）。
+      #   在 Xcode 的 script phase 里（非交互 shell，且处于 Xcode 的构建进程沙箱中），
+      #   让 Gradle 去**启动常驻 daemon** 会**挂死**：表现为 xcodebuild 长时间毫无进展，
+      #   日志里只看得到 `/bin/sh -c .../Script-xxxx.sh` 一行（Xcode 缓冲了脚本输出，
+      #   所以正常运行时也看不到任何内容），job 最终只能被取消。
+      #   `--no-daemon` 让 Gradle 在脚本进程内直接构建 —— 多花一两分钟启动 JVM，
+      #   但不会挂。
+      - name: Compile Kotlin Framework
+        basedOnDependencyAnalysis: false
+        script: |
+          cd "$SRCROOT/.."
+          ./gradlew --no-daemon :shared:feature:embedAndSignAppleFrameworkForXcode

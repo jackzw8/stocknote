@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>股票交易笔记</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.1.8</string>
+	<key>CFBundleVersion</key>
+	<string>58</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string></string>
+	</dict>
+	<!-- ⚠️⚠️ 2026-10-01：**真机"点图标即闪退"的根因**就在这里。
+	     Compose Multiplatform 1.7+ 在启动时会做一次 Info.plist 严格校验
+	     （`ComposeUIViewController(configure = { enforceStrictPlistSanityCheck = ... })`），
+	     缺这一项就直接抛 `IllegalStateException` 把进程干掉。它**只在真机运行期暴露**：
+	     K/N 编译通过、Xcode 归档通过、App 也装得上 —— 就是点图标立刻闪退，
+	     所以前面十几轮 CI 全绿也照样中招。
+	     弹屏取证（MainViewController.kt 里的 setUnhandledExceptionHook）拿到的原文：
+	       kotlin.IllegalStateException: Error: 'Info.plist' doesn't have a valid
+	       'CADisableMinimumFrameDurationOnPhone' entry, or has it set to 'false'.
+	       This will result in an inadequate performance on iPhones with high refresh rate.
+	     ⚠️ 这一项**不是"为过检查而凑数"**：它的实际作用是允许 App 在 ProMotion 屏
+	     （iPad Pro / iPhone Pro 的 120Hz）上以高于 60fps 渲染，本来就该配。 -->
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>UIRequiredDeviceCapabilities</key>
+	<array>
+		<!-- ⚠️ 必须是 arm64：iOS 11 起不再支持 32 位，写 armv7 会让现代 iPhone/iPad 装不上 -->
+		<string>arm64</string>
+	</array>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<!-- iPad 允许四向旋转（老周 2026-09-30：iPhone 与 iPad 都要能跑） -->
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<false/>
+	</dict>
+	<!-- 2026-10-01：打开 iOS 的「文件共享」，让沙盒 Documents 目录可见 ——
+	     排查真机问题时要把日志文件（Documents/stocknote.log）取出来，
+	     而爱思的「实时日志」抓不到第三方 App 的输出（实测全是系统进程）。
+	     这两项分别在 爱思/iTunes 的「文件共享」和 iPad 自带「文件」App 里生效。 -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
+</dict>
+</plist>

@@ -1,0 +1,6 @@
+-- 迁移 v12 → v13：trade_plan 加「完成标记」列（老周 2026-09-22，REQ-PLAN-01 增补）。
+--
+-- done_at：NULL = 进行中；yyyy-MM-dd = 标记完成那天。
+-- 入口只有计划列表行尾的圆点（点一下标记、再点取消）；编辑计划页只透传、不清掉。
+-- 完成的计划：不进「进行中计划」条数与「计划金额合计」，列表里排最后并置灰。
+ALTER TABLE trade_plan ADD COLUMN done_at TEXT;

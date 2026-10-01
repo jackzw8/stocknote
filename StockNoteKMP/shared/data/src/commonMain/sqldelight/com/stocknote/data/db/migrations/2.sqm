@@ -1,0 +1,32 @@
+-- 迁移 v2 → v3：交易加 情绪 / 评分 / 标签 三列（REQ-NOTE-02/04/05）。
+-- 均为可空列，旧行不受影响。
+-- 回填：当前所有安装都来自 M1 的演示种子，按标的补上示例标签/情绪/评分，
+--       让「按策略分析」在升级后立即有内容（正式用户数据不存在此问题）。
+
+ALTER TABLE trade ADD COLUMN emotion TEXT;
+ALTER TABLE trade ADD COLUMN score INTEGER;
+ALTER TABLE trade ADD COLUMN tag_ids TEXT;
+
+-- 贵州茅台 → 价值投资
+UPDATE trade SET tag_ids = '价值投资', emotion = '冷静', score = 4
+WHERE security_id IN (SELECT id FROM security WHERE symbol = 'sh600519');
+
+-- 宁德时代 → 突破
+UPDATE trade SET tag_ids = '突破', emotion = '贪婪', score = 3
+WHERE security_id IN (SELECT id FROM security WHERE symbol = 'sz300750');
+
+-- 沪深300ETF → 网格
+UPDATE trade SET tag_ids = '网格', emotion = '冷静', score = 5
+WHERE security_id IN (SELECT id FROM security WHERE symbol = 'sh510300');
+
+-- 五粮液 → 波段
+UPDATE trade SET tag_ids = '波段', emotion = '犹豫', score = 2
+WHERE security_id IN (SELECT id FROM security WHERE symbol = 'sz000858');
+
+-- 腾讯控股 → 价值投资
+UPDATE trade SET tag_ids = '价值投资', emotion = '恐惧', score = 3
+WHERE security_id IN (SELECT id FROM security WHERE symbol = 'hk00700');
+
+-- 苹果 → 趋势
+UPDATE trade SET tag_ids = '趋势', emotion = '自信', score = 4
+WHERE security_id IN (SELECT id FROM security WHERE symbol = 'usAAPL');

@@ -1,0 +1,75 @@
+# 版本目录 —— 单一事实来源
+#
+# 这套版本不是随手挑的，是按下面的约束逐条推出来的（详见 项目文档/技术说明书-2.0）：
+#   1. compose ui 1.11.x 的 AAR 元数据 minCompileSdk = 35 → compileSdk 必须 >= 35
+#   2. API 35 要求 AGP >= 8.6.0
+#   3. AGP 8.6 要求 Gradle >= 8.7 —— 与本机既有 Gradle 8.7 吻合，无需额外下载
+#   4. SQLDelight 2.3.2 的 gradle-plugin 依赖 kotlin-gradle-plugin:2.3.10
+#   5. Compose Multiplatform 1.11 的原生端最低 Kotlin 版本恰好也是 2.3.10
+#   => Kotlin 2.3.10 + CMP 1.11.1 + SQLDelight 2.3.2 三者互相咬合，改动任何一个都要重新核对。
+
+[versions]
+kotlin = "2.3.10"
+agp = "8.6.1"
+composeMultiplatform = "1.11.1"
+sqldelight = "2.3.2"
+ktor = "3.5.2"
+coroutines = "1.10.2"
+serialization = "1.11.0"
+# sqlcipher-android：**不要升到 4.18+**
+# 4.18.0 / 4.19.0 的 AAR 元数据要求 minCompileSdk=37，会直接卡死 compileSdk 35 的构建
+# （报错形如 "requires ... compile against version 37 or later"）。
+# 4.17.0 及以下全部 minCompileSdk=1，功能上没有缺失。
+sqlcipher = "4.17.0"
+activityCompose = "1.10.1"
+# 真机 UI 自动化测试（老周 2026-09-16：执行 9/14 提出的方案）
+# 用 UiAutomator 而非裸 adb：setText 走 Accessibility（绕开输入法，中文/空格都能输入）
+androidxTestJunit = "1.2.1"
+androidxTestRunner = "1.6.2"
+uiautomator = "2.3.0"
+
+compileSdk = "35"
+minSdk = "24"
+targetSdk = "35"
+
+# 桌面端内嵌浏览器（JavaFX WebView，老周 2026-09-30）—— 只有 shared/feature 的 **jvm 变体**用它，
+# Android/iOS 不受影响。选 17.x 是因为与 jvmToolchain(17) 同一条 LTS 线；
+# 用 `:win` classifier（原生库在 jar 内，无需另外分发）。
+javafx = "17.0.15"
+
+[libraries]
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+
+ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
+ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
+ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }
+
+sqldelight-runtime = { module = "app.cash.sqldelight:runtime", version.ref = "sqldelight" }
+sqldelight-coroutines = { module = "app.cash.sqldelight:coroutines-extensions", version.ref = "sqldelight" }
+sqldelight-android-driver = { module = "app.cash.sqldelight:android-driver", version.ref = "sqldelight" }
+sqldelight-native-driver = { module = "app.cash.sqldelight:native-driver", version.ref = "sqldelight" }
+# ⚠️ 仅供 data 模块的 **jvmTest** 使用（2026-09-29）：给 PortfolioRepository 建
+# 真数据库的契约测试。用**不加密**的 JdbcSqliteDriver —— 测的是 SQL/事务/口径，
+# 不是 sqlcipher 本身，测试里无需真加密（也避免把 C 库拖进 JVM 测试）。
+sqldelight-sqlite-driver = { module = "app.cash.sqldelight:sqlite-driver", version.ref = "sqldelight" }
+
+sqlcipher-android = { module = "net.zetetic:sqlcipher-android", version.ref = "sqlcipher" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+
+androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidxTestJunit" }
+androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTestRunner" }
+androidx-test-uiautomator = { module = "androidx.test.uiautomator:uiautomator", version.ref = "uiautomator" }
+
+[plugins]
+kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlinAndroid = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+# 桌面外壳 :desktopApp 用（纯 JVM + compose.desktop，老周 2026-09-30）
+kotlinJvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlinSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+composeCompiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+composeMultiplatform = { id = "org.jetbrains.compose", version.ref = "composeMultiplatform" }
+androidApplication = { id = "com.android.application", version.ref = "agp" }
+androidLibrary = { id = "com.android.library", version.ref = "agp" }
+sqldelight = { id = "app.cash.sqldelight", version.ref = "sqldelight" }
+

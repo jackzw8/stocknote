@@ -1,0 +1,22 @@
+CREATE TABLE account (
+    id TEXT NOT NULL PRIMARY KEY,
+    name TEXT NOT NULL,
+    currency TEXT NOT NULL,
+    cash REAL NOT NULL DEFAULT 0
+);
+
+selectAll:
+SELECT * FROM account ORDER BY name;
+
+selectById:
+SELECT * FROM account WHERE id = ?;
+
+upsert:
+INSERT OR REPLACE INTO account(id, name, currency, cash) VALUES (?, ?, ?, ?);
+
+totalCashByCurrency:
+SELECT currency, SUM(cash) AS total FROM account GROUP BY currency;
+
+-- 现金余额增减（买卖联动：买入扣、卖出加；老周 2026-09-16）
+updateCash:
+UPDATE account SET cash = ? WHERE id = ?;

@@ -1,0 +1,73 @@
+-- 交易计划（REQ-PLAN-01，老周 2026-09-19 定稿）。
+--
+-- ⚠️ 关键边界：计划**不是交易**，不写入 transaction、不参与全量重放，
+-- 不影响持仓市值 / 累计盈亏 / XIRR 现金流。这只是一张独立的「意向表」，
+-- 仅用于查阅与提醒（与记一笔的核心区别：记成交事实用，这里记「我打算怎么做」）。
+--
+-- 标的的市场/币种由 security 表关联得出，此处不冗余存（避免两处不一致）。
+CREATE TABLE trade_plan (
+    id TEXT NOT NULL PRIMARY KEY,
+    security_id TEXT NOT NULL,
+    side TEXT NOT NULL,
+    target_price REAL NOT NULL,
+    -- 折扣：NULL = 未选（原型默认态）；取值 0.4 / 0.5 … 1.2
+    discount REAL,
+    planned_price REAL NOT NULL,
+    quantity REAL NOT NULL,
+    -- 费率单位：万分之（与设置页口径一致，A股缺省 2.5、港股 5）
+    fee_rate REAL NOT NULL DEFAULT 0,
+    note TEXT NOT NULL DEFAULT '',
+    tag_ids TEXT NOT NULL DEFAULT '',
+    -- 时间字段统一 yyyy-MM-dd（老周 2026-09-21，与 trade.trade_date 同格式）。
+    -- 历史值（纪元毫秒 / ISO 日期时间）由迁移 11.sqm 转换。
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    -- 完成标记（老周 2026-09-22）：NULL = 进行中；yyyy-MM-dd = 标记完成那天。
+    -- 入口只有计划列表行尾的圆点（编辑页只透传不清掉）；完成的计划
+    -- 不进「进行中计划」条数与「计划金额合计」，列表里排最后并置灰。
+    done_at TEXT
+);
+
+CREATE INDEX trade_plan_security_idx ON trade_plan(security_id);
+
+-- 列表默认：创建时间倒序（老周定；原型另有「距达成最近 / 金额↓」在内存里排序）
+selectAll:
+SELECT * FROM trade_plan ORDER BY created_at DESC;
+
+selectById:
+SELECT * FROM trade_plan WHERE id = ?;
+
+selectBySecurity:
+SELECT * FROM trade_plan WHERE security_id = ? ORDER BY created_at DESC;
+
+insertItem:
+INSERT OR REPLACE INTO trade_plan(
+    id, security_id, side, target_price, discount, planned_price,
+    quantity, fee_rate, note, tag_ids, created_at, updated_at, done_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateItem:
+UPDATE trade_plan
+SET security_id = ?, side = ?, target_price = ?, discount = ?, planned_price = ?,
+    quantity = ?, fee_rate = ?, note = ?, tag_ids = ?, updated_at = ?, done_at = ?
+WHERE id = ?;
+
+/** 只更新标签（M11 修复，2026-09-28）：删标签时同步清理计划里的引用，避免留下"幽灵标签"。 */
+updateTagIds:
+UPDATE trade_plan SET tag_ids = ?, updated_at = ? WHERE id = ?;
+
+-- 行上快捷标记/取消完成（老周 2026-09-22）：只动 done_at，不碰 updated_at
+-- （这不是「编辑」，列表按 created_at 排序也不应受影响）。
+setDoneAt:
+UPDATE trade_plan SET done_at = ? WHERE id = ?;
+
+-- M15 方案 2（2026-09-27）：删标的时级联清理，避免留下孤儿计划
+deleteBySecurity:
+DELETE FROM trade_plan WHERE security_id = ?;
+
+deleteById:
+DELETE FROM trade_plan WHERE id = ?;
+
+countAll:
+SELECT count(*) FROM trade_plan;

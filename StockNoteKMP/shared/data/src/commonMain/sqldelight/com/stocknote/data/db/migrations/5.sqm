@@ -1,0 +1,22 @@
+-- 迁移 v5 → v6：现金等价物示例标的由 511880（银华日利）改为 511660（老周 2026-09-15 定稿）。
+-- 只改代码与名称，不动任何账务数值（数量/价格/流水保持原样，重放结果不变）。
+-- 已安装用户的老库同步改；新装用户走 DemoData 里的新种子。
+--
+-- ⚠️ **L10（2026-09-27 记录，刻意不改）**：`security.symbol` 上有 **UNIQUE 索引**
+-- （`security_symbol_idx`）。若某个用户的库里**同时存在** sh511880 与 sh511660，
+-- 这条 UPDATE 会撞唯一索引抛 `SQLiteConstraintException` → **迁移失败 → 升级后 App 打不开**。
+-- 概率很低（需要用户自己手动建过 sh511660），但后果不可逆。
+-- 不改的原因：迁移**已随版本发布**，对已升级用户改它无效（他们早跑过了），改内容反而会引入
+-- "同一版本号不同迁移内容"的隐患。若要处理，应在**运行时**做数据自检（属新功能，另行排期）。
+
+UPDATE security
+SET symbol = 'sh511660', name = '货币ETF'
+WHERE symbol = 'sh511880';
+
+UPDATE quote
+SET symbol = 'sh511660'
+WHERE symbol = 'sh511880';
+
+UPDATE daily_close
+SET symbol = 'sh511660'
+WHERE symbol = 'sh511880';

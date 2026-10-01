@@ -1,0 +1,175 @@
+# iOS 打包（GitHub Actions，**手动触发**）—— 老周 2026-09-30
+#
+# 为什么用 Actions：本机是 Windows，而 Kotlin/Native 只能在 macOS 上链接 Apple 产物，
+# 所以 iOS 版本必须借 GitHub 的 macOS runner 出包。
+#
+# ⚠️ **签名**：仓库里没有（也不该有）Apple 开发者证书，所以这里产出的是
+# **未签名 IPA**，需要用 AltStore / Sideloadly / 爱思助手等工具自签后装到 iPhone/iPad。
+#
+# ⚠️ 首次运行大概率需要迭代：iOS 侧代码此前**从未在 macOS 上编译过**
+#（见 StockNoteKMP/iosApp/README.md 的「未验证」说明）。
+name: iOS 打包（手动）
+
+on:
+  # 只手动触发：不在 push / PR 上自动跑（macOS runner 很贵，私有仓库按 10 倍分钟计费）
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: 构建配置
+        required: true
+        default: Release
+        type: choice
+        options:
+          - Release
+          - Debug
+      build_simulator:
+        description: 只编译模拟器版本（快、不出 IPA，用于验证代码能否编译）
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  build-ios:
+    name: 构建 iOS 应用
+    # ⚠️ 2026-10-01 演进史（每一步都是被 CI 逼出来的）：
+    #   ① macos-14：默认 Xcode **15.4**，打不开 XcodeGen 2.46 生成的 Xcode 16 工程格式
+    #      （objectVersion 77）→ `Unable to read project ... future Xcode project file format (77)`。
+    #   ② macos-15：Xcode **16.4**，工程能打开了，但只带 **iOS 18.5 SDK** ——
+    #      Compose Multiplatform 1.11 编出的 SharedUI 引用了 **iOS 26 才有的 `UIViewLayoutRegion`**
+    #      （位于 SwiftUICore），归档链接时报：
+    #        Undefined symbols: _OBJC_CLASS_$_UIViewLayoutRegion, referenced from SharedUI(CMPLayoutRegion.o)
+    #        ld: symbol(s) not found for architecture arm64 / ** ARCHIVE FAILED **
+    #   ③ macos-26（2026-02 起 GA）：自带 **Xcode 26 / iOS 26 SDK**，`UIViewLayoutRegion` 才存在。
+    runs-on: macos-26
+    # ⚠️ 2026-10-01：曾一度提到 180，现改回 90。
+    #   原因：真实故障不是"跑太久超时"，而是 **xcodebuild 的 script phase 挂死**
+    #   （Xcode 里跑 ./gradlew 时 Gradle daemon 起不来，见 iosApp/project.yml 的 --no-daemon 修复）。
+    #   挂死时超时越长、用户白等越久（180 分钟意味着要干等 3 小时），90 分钟是"正常能跑完"与
+    #   "卡死时别耗太久"之间的平衡：正常流程约 30~40 分钟（link 单次 19m41s + Xcode 编译）。
+    timeout-minutes: 90
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Kotlin/Native 工具链约 1~2GB，且首次链接很慢 —— 必须缓存，否则每次都要重下
+      - name: 缓存 Gradle 与 Kotlin/Native
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.konan
+          key: ${{ runner.os }}-gradle-konan-${{ hashFiles('StockNoteKMP/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-konan-
+
+      # 打印 Xcode 版本：工程格式（objectVersion）与 Xcode 大版本强相关，
+      # 以后再出 "future Xcode project file format" 这类错，一眼就能对上。
+      - name: 显示 Xcode 版本
+        run: |
+          ls -d /Applications/Xcode*.app 2>/dev/null || true
+          xcodebuild -version
+          xcode-select -p
+
+      - name: 安装 XcodeGen
+        run: brew install xcodegen
+
+      - name: 编译共享层（Kotlin → SharedUI.framework）
+        working-directory: StockNoteKMP
+        run: |
+          chmod +x gradlew
+          ./gradlew :shared:feature:linkReleaseFrameworkIosArm64 --no-daemon --stacktrace
+
+      # ⚠️ 诊断用（2026-10-01）：Compose Multiplatform 1.10+ 的 iOS 实现（CMPLayoutRegion）
+      # 引用了 iOS 26 才有的 `UIViewLayoutRegion`（在 SwiftUICore 里）。
+      # 这里直接看 framework 里该符号的**链接属性**：
+      #   weak external  → 旧系统上符号缺失时指针为 nil，只要 CMP 内部有 @available 判断就不会崩；
+      #   external       → 旧系统 dyld 会因找不到符号而**启动即崩**（等于只能 iOS 26+ 用）。
+      - name: 检查 UIViewLayoutRegion 的链接属性（判断最低可用 iOS）
+        working-directory: StockNoteKMP
+        run: |
+          FW=$(find shared/feature/build -type f -name 'SharedUI' -path '*releaseFramework*' | head -1)
+          echo "framework binary: $FW"
+          if [ -n "$FW" ]; then
+            nm -m "$FW" 2>/dev/null | grep -iE 'UIViewLayoutRegion|SwiftUICore' || echo '(未找到该符号)'
+          fi
+
+      - name: 生成 Xcode 工程
+        working-directory: StockNoteKMP/iosApp
+        run: xcodegen generate
+
+      # ⚠️⚠️ 2026-10-01：**归档前必须校验 Info.plist 真的会被用上**。
+      # 此前 project.yml 用的是 `info:` 段 —— 那语义是「让 XcodeGen **生成**一份 Info.plist」，
+      # 不是「使用仓库里这份」，结果仓库里那份被架空：
+      # 线上 IPA 里 21 个键全是 Xcode 注入的，自定义的 4 项（含 CMP 启动强校验必需的
+      # CADisableMinimumFrameDurationOnPhone）**一个都不在**，版本也退回 1.0/1。
+      # 于是「补了修复却依然闪退」白跑两轮 CI —— 这一步就是防止同类问题再次无声发生。
+      - name: 校验 Info.plist 会被真正用上
+        working-directory: StockNoteKMP
+        run: |
+          echo "===== ① 仓库里的 Info.plist 关键键（文件本身没问题吧？）====="
+          for k in CADisableMinimumFrameDurationOnPhone CFBundleShortVersionString CFBundleVersion CFBundleDisplayName UILaunchScreen; do
+            printf '%-45s = ' "$k"
+            /usr/libexec/PlistBuddy -c "Print :$k" iosApp/iosApp/Info.plist 2>/dev/null || echo "!!! 缺失 !!!"
+          done
+          echo "===== ② 生成工程里的 INFOPLIST_FILE（应指向 iosApp/Info.plist）====="
+          grep -E "INFOPLIST_FILE|GENERATE_INFOPLIST_FILE" iosApp/StockNoteApp.xcodeproj/project.pbxproj | sort -u || echo "(未找到，需人工检查)"
+
+      # ---- 仅模拟器：快速验证能否编译（不出 IPA）----
+      - name: 构建（模拟器，仅验证编译）
+        if: ${{ inputs.build_simulator }}
+        working-directory: StockNoteKMP/iosApp
+        run: |
+          xcodebuild \
+            -project StockNoteApp.xcodeproj \
+            -scheme StockNoteApp \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      # ---- 真机：未签名 archive ----
+      - name: 构建（真机未签名 archive）
+        if: ${{ !inputs.build_simulator }}
+        working-directory: StockNoteKMP/iosApp
+        run: |
+          xcodebuild \
+            -project StockNoteApp.xcodeproj \
+            -scheme StockNoteApp \
+            -configuration ${{ inputs.configuration }} \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/StockNoteApp.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            archive
+
+      - name: 打成未签名 IPA
+        if: ${{ !inputs.build_simulator }}
+        run: |
+          set -e
+          APP="$RUNNER_TEMP/StockNoteApp.xcarchive/Products/Applications/StockNoteApp.app"
+          test -d "$APP"
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/Payload/"
+          cd "$RUNNER_TEMP"
+          zip -qry "StockNoteApp-unsigned.ipa" Payload
+          ls -lh "StockNoteApp-unsigned.ipa"
+
+      - name: 上传 IPA
+        if: ${{ !inputs.build_simulator }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: StockNote-iOS-unsigned-ipa
+          path: ${{ runner.temp }}/StockNoteApp-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
