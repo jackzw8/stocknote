@@ -28,15 +28,33 @@ settings:
       - "$(inherited)"
       - "-framework"
       - "SharedUI"
-      # ⚠️ 2026-10-01：SQLDelight 的 native driver（co.touchlab:sqliter）在链接/运行时
-      #   要调用**系统 libsqlite3** —— Kotlin/Native **不会**把它打进 framework，
-      #   而我们是「直接集成」（非 CocoaPods），所以**必须在这里显式链接**。
-      #   否则 Xcode 归档时报（CI 实测）：
-      #     "_sqlite3_step", referenced from:
-      #         _kfun:co.touchlab.sqliter.interop.ActualSqliteStatement#step(){} in SharedUI.framework.o
-      #     ld: symbol(s) not found for architecture arm64
-      #     ** ARCHIVE FAILED **
-      - "-lsqlite3"
+      # ⚠️⚠️ 2026-10-02（P0-1）：**这里原本是 `-lsqlite3`，现在必须去掉。**
+      #
+      # 背景：SQLDelight 的 native driver（co.touchlab:sqliter）要调 `sqlite3_*`，
+      # 而 Kotlin/Native 不会把它打进 framework，所以此前在**应用侧**补了 `-lsqlite3`
+      #（不补的报错见 git 历史：`"_sqlite3_step", referenced from: … SharedUI.framework.o`）。
+      #
+      # 但接入 SQLCipher 后，这些 `sqlite3_*` 符号**必须由 SQLCipher 提供**：
+      # 若系统 libsqlite3 与 SQLCipher 同时在场，谁提供符号取决于逐符号的链接顺序 ——
+      # 一旦系统库胜出，`PRAGMA key` 会**静默变成空操作**，库仍是明文（最危险的失败方式）。
+      # ⇒ 只留 SQLCipher 一个提供者；万一它没提供，链接会**直接失败**（CI 立刻红），
+      #   而不是悄悄写成明文。自检见 `Platform.ios.kt` 的 `reportCipherVersion`。
+      - "-framework"
+      - "Security"
+
+# SQLCipher（P0-1，2026-10-02）—— 官方 SwiftPM 包，`binaryTarget` 指向 Zetetic 在
+# GitHub Releases 上发布的**预编译 xcframework**（含 sqlite3 的加密实现），
+# 所以「直接集成」也能拿到 native 库，无需 CocoaPods。
+#
+# ⚠️ 为什么用 `exactVersion` 而不是 `from`：与 Android 侧的 `net.zetetic:sqlcipher-android`
+#   保持**同一个 4.17.0**（`gradle/libs.versions.toml` 里注明了「不要升到 4.18+」，
+#   因为那会要求 compileSdk 37）。两平台同版本，排查时不用先怀疑版本差异。
+# ⚠️ xcframework 是从网络下载的二进制（SwiftPM 会校验 Package.swift 里写死的 sha256），
+#   首次构建变慢属正常；缓存由 Xcode 的 DerivedData / GitHub Actions 的 cache 兜。
+packages:
+  SQLCipher:
+    url: https://github.com/sqlcipher/SQLCipher.swift
+    exactVersion: 4.17.0
 
 targets:
   StockNoteApp:
@@ -47,6 +65,10 @@ targets:
         # ⚠️ 别把 Info.plist 当**资源**打进 bundle（会与 INFOPLIST_FILE 打架）
         excludes:
           - "Info.plist"
+    # P0-1（2026-10-02）：SQLCipher 由上面的 SwiftPM 包提供 —— sqliter 的 `sqlite3_*` 符号
+    # 必须解析到它（理由见上方 OTHER_LDFLAGS 处的长注释），所以**必须**挂成 target 依赖。
+    dependencies:
+      - package: SQLCipher
     # ⚠️⚠️ 2026-10-01：**这里原本是 `info: { path: iosApp/Info.plist }`，那是真机闪退修复"失效"的根因。**
     #
     # XcodeGen 的 `info:` 段语义是「**让 XcodeGen 生成一份 Info.plist**」（不是"使用仓库里这份"）——
@@ -73,6 +95,10 @@ targets:
         # 少了 iPad（2）装到 iPad 上会以"手机 App 兼容模式"运行、不分屏也不适配。
         # 老周 2026-09-30 明确要求「iPhone 和 iPad 都要能跑」。
         TARGETED_DEVICE_FAMILY: "1,2"
+        # P1-5（2026-10-02）：App 图标。资源在 `iosApp/Assets.xcassets`（就落在下面的 sources
+        # 路径里，XcodeGen 会自动把它放进 Resources 阶段），这里只需声明用哪个图集。
+        # 没这一项时装出来是**默认白图标** —— 项目一直以来的状态。
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     preBuildScripts:
       # 关键一步：让 Gradle 编译并嵌入 Kotlin framework（含 Compose UI）
       #

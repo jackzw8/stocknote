@@ -155,6 +155,19 @@ private fun StatisticScreenContent(
                     } else null,
                 )
                 Spacer(Modifier.height(11.dp))
+                // 持仓浮动盈亏（老周 2026-10-02）：从持仓页**移入**统计页，紧贴「持仓市值」下方。
+                // 口径与持仓页原卡完全一致 = snapshot.unrealizedPnlTotal（Σ 各持仓浮动盈亏折算本位币），
+                // 收益率 = 浮动盈亏 ÷ 持仓成本市值（成本市值 = 市值 − 浮动盈亏）。
+                val unrealTotal = snapshot?.unrealizedPnlTotal ?: 0.0
+                val costBasis = mvTotal - unrealTotal
+                MetricCell(
+                    "💹 持仓浮动盈亏",
+                    Format.moneySigned(unrealTotal),
+                    "持仓收益率 " + Format.percent(if (costBasis > 0.0) unrealTotal / costBasis else null),
+                    valueColor = if (unrealTotal >= 0) StockNoteColors.Up else StockNoteColors.Down,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(11.dp))
                 MetricCell(
                     "💰 现金合计",
                     Format.money(snapshot?.cashAmount ?: 0.0),
@@ -228,50 +241,8 @@ private fun StatisticScreenContent(
             }
         }
 
-        // ---- 持仓 TOP ----
-        if (snapshot != null && snapshot.positions.isNotEmpty()) {
-            item {
-                Sec(
-                    title = "持仓 TOP5",
-                    more = "全部 ›",
-                    onMore = { onSwitchTab(com.stocknote.feature.state.Screen.HOLDINGS) },
-                    modifier = Modifier.padding(top = 16.dp),
-                ) {
-                    CardBox {
-                        // 老周 2026-09-19：按**市值**降序取前 5（此前固定前 3 条）。
-                        // 市值口径 = 折算本位币（与「持仓市值 / 占总资产」一致；
-                        // 港股/美股直接用原币市值比较会失真）。
-                        snapshot.positions
-                            .sortedByDescending { snapshot.positionMarketValueInBase(it) }
-                            .take(5)
-                            .forEach { p ->
-                            val ratio = p.marketPrice?.let { price ->
-                                if (p.avgCost > 0) (price - p.avgCost) / p.avgCost else null
-                            }
-                            StockRow(
-                                avatar = p.name.take(1),
-                                name = p.name,
-                                marketTag = p.market.label,
-                                // 明细拆两行（老周 2026-09-21）：第 1 行「数量 · 成本」，第 2 行「现价」
-                                detail = "${Format.quantity(p.quantity)}${p.market.quantityUnit} · 成本 ${Format.money(p.avgCost, "")}",
-                                // 当日涨跌%（老周 2026-09-23）：现价后追加；缺昨收（手工价/场外基金）则不加
-                                detail2 = "现 ${p.marketPrice?.let { Format.money(it, "") } ?: "—"}" +
-                                    (p.dayChangeRatio?.let { " · ${Format.percent(it)}" } ?: ""),
-                                // 2026-09-17 B 方案：金额统一 2 位小数（StockRow 已纵向四行，不再挤压名称列）
-                                priceText = Format.money(p.marketValue, p.currency.symbol),
-                                pnlText = Format.moneySigned(p.unrealizedPnl, p.currency.symbol) +
-                                    " · " + Format.percent(ratio, decimals = 1),
-                                pnlPositive = p.unrealizedPnl >= 0,
-                                // 图标按市场上色（老周 2026-09-21）：与持仓明细、配置占比环形图同一套色
-                                market = p.market,
-                                avatarTinted = p.unrealizedPnl < 0,
-                                onClick = { onOpenSecurity(p.securityId) },
-                            )
-                        }
-                    }
-                }
-            }
-        }
+        // ---- 持仓 TOP5 已迁到持仓页（老周 2026-10-02）----
+        // 统计页只保留市值/浮盈/现金/回撤/胜率这些**汇总指标**；个股明细类内容统一放持仓页。
 
         // ---- 隐私说明（.note.blue）----
         item {

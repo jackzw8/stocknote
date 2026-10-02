@@ -2,6 +2,7 @@ package com.stocknote.data.net
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -249,5 +250,89 @@ class DividendSourceTest {
                 "usAAPL",
             ).size,
         )
+    }
+
+    // ---------------------------------------------------------------- 响应体合法性（P1-3，2026-10-02）
+
+    /**
+     * ⚠️ 下面几个样本是 **2026-10-02 用 curl 抓的真实响应**（HTTP 全部 200）：
+     *  - 有数据：`code:0` + `success:true` + `result.data=[…]`
+     *  - **无数据**：`code:9201` + `success:false` + `message:"返回数据为空"` + `result:null`
+     *  - 参数错：`code:9501` + `message:"报表配置不存在,…"` + `result:null`
+     *
+     * 关键结论：**「确实没有数据」时 `result` 本来就是 `null`** ——
+     * 判据只能是 `code`，不能把 `result:null` 一律当失败（否则没有分红历史的标的每次都误报取数失败）。
+     */
+    private val emDataJson =
+        """{"version":"x","result":{"pages":1,"data":[{"PRETAX_BONUS_RMB":280.2423,"EX_DIVIDEND_DATE":"2026-06-26 00:00:00","ASSIGN_PROGRESS":"实施分配"}],"count":28},"success":true,"message":"ok","code":0}"""
+
+    /** 无分红历史（实测 830799）/ 代码查不到（999999）/ 美股交易所猜错（AAPL.N）都是这一个形态。 */
+    private val emEmptyJson =
+        """{"version":null,"result":null,"success":false,"message":"返回数据为空","code":9201}"""
+
+    /** 参数错（实测：reportName 拼错）→ 必须判失败，不能当成「没有分红」。 */
+    private val emBadParamJson =
+        """{"version":null,"result":null,"success":false,"message":"报表配置不存在,RPT_NOT_EXIST_XXX","code":9501}"""
+
+    @Test
+    fun `东财-有数据算成功`() {
+        assertTrue(DividendSource.eastmoneyOk(emDataJson))
+        assertEquals(1, DividendSource.parseCnBonus(emDataJson, "sh600519").size)
+    }
+
+    @Test
+    fun `东财-返回数据为空算成功且无分红`() {
+        // ⚠️ 最容易被"顺手统一"改错的一条：把 result:null 一律当失败
+        // → 没有分红历史的标的每次扫描都会弹「取数失败，可能漏检」
+        assertTrue(DividendSource.eastmoneyOk(emEmptyJson), "9201/返回数据为空 = 查询成功、确实没数据")
+        assertEquals(0, DividendSource.parseCnBonus(emEmptyJson, "bj830799").size)
+    }
+
+    @Test
+    fun `东财-明确错误码必须算失败`() {
+        assertFalse(DividendSource.eastmoneyOk(emBadParamJson), "9501 报表配置错 = 取数失败（P1-3 的核心）")
+        // 限流/WAF 之类返回的 `code:0 + result:null`（非 9201）同样不能当"确认无分红"
+        assertFalse(DividendSource.eastmoneyOk("""{"result":null,"success":true,"message":"ok","code":0}"""))
+        // 非 JSON（拦截页 HTML）与空响应
+        assertFalse(DividendSource.eastmoneyOk("<html>403 Forbidden</html>"))
+        assertFalse(DividendSource.eastmoneyOk(""))
+        // result 里连 data 段都没有 = 结构不完整
+        assertFalse(DividendSource.eastmoneyOk("""{"result":{"pages":0},"success":true,"code":0}"""))
+    }
+
+    @Test
+    fun `东财-data为空数组算成功`() {
+        // data: [] 是「查询成功但确实一条都没有」，不是失败（与 result:null 的区别见函数 KDoc）
+        assertTrue(
+            DividendSource.eastmoneyOk("""{"result":{"pages":0,"data":[],"count":0},"success":true,"code":0}"""),
+        )
+    }
+
+    @Test
+    fun `港股K线-有K线算成功_空K线与错误码算失败`() {
+        assertTrue(
+            DividendSource.tencentKlineOk(
+                """{"code":0,"msg":"","data":{"hk00700":{"qfqday":[["2026-01-02","1","2","3","4","5"]]}}}""",
+                "hk00700",
+            ),
+        )
+        // 实测无效代码：code 仍为 0，但 day 是空数组、且没有 qfqday
+        assertFalse(
+            DividendSource.tencentKlineOk("""{"code":0,"msg":"","data":{"hk99999":{"day":[],"qt":{}}}}""", "hk99999"),
+        )
+        // 实测参数错
+        assertFalse(DividendSource.tencentKlineOk("""{"code":1,"msg":"bad params"}""", "hk00700"))
+        assertFalse(DividendSource.tencentKlineOk("nope", "hk00700"))
+    }
+
+    @Test
+    fun `基金分红页-非分红页算失败`() {
+        assertTrue(
+            DividendSource.cnFundDividendPageOk(
+                "<title>沪深300ETF华泰柏瑞(510300)基金分红送配 _ 基金档案 _ 天天基金网</title>",
+            ),
+        )
+        assertFalse(DividendSource.cnFundDividendPageOk("<html><body>访问过于频繁，请稍后再试</body></html>"))
+        assertFalse(DividendSource.cnFundDividendPageOk(""))
     }
 }

@@ -7,6 +7,7 @@ import com.stocknote.data.AppContainer
 import com.stocknote.data.platform.nativeLog
 import kotlin.experimental.ExperimentalNativeApi
 import kotlin.native.setUnhandledExceptionHook
+import platform.Foundation.NSBundle
 import platform.UIKit.UIAlertAction
 import platform.UIKit.UIAlertActionStyleDefault
 import platform.UIKit.UIAlertController
@@ -119,7 +120,41 @@ fun mainViewController(): UIViewController {
     }
     nativeLog("[启动] AppContainer 就绪，开始创建 ComposeUIViewController")
 
-    return ComposeUIViewController { App(container = container) }
+    // 版本号必须在**组合之外**算好：`bundleVersionLabel()` 每次都要读 Info.plist，
+    // 没必要跟着重组反复读。
+    val versionLabel = bundleVersionLabel()
+
+    return ComposeUIViewController {
+        App(
+            container = container,
+            versionLabel = versionLabel,
+            platformLabel = IOS_MIN_VERSION,
+        )
+    }
+}
+
+/** 「关于」页显示的最低系统要求（老周 2026-10-02：此前该文案写死在 commonMain，iOS 也显示 Android）。 */
+private const val IOS_MIN_VERSION = "iOS 14.0+"
+
+/**
+ * 从 **`Info.plist`** 读版本号，产出与 Android 同形的 `1.1.8 (58)`。
+ *
+ * 为什么与 Android 对称：那边取 `BuildConfig.VERSION_NAME/VERSION_CODE`，**都是打包产物**——
+ * 这里绝不硬编码，否则发版时就会多出第三处会忘改的地方（规范 §3 只要求同步三处）。
+ *
+ * ⚠️ 老周 2026-10-02 报「iOS 上「关于」页看不到版本号」，根因就是 iOS 外壳此前
+ * `App(container = …)` **没传 versionLabel**，页面走了「—」的兜底分支；
+ * 同一处还暴露了「平台文案写死 Android」的问题（见 [IOS_MIN_VERSION]）。
+ */
+private fun bundleVersionLabel(): String {
+    val info = NSBundle.mainBundle
+    val name = info.objectForInfoDictionaryKey("CFBundleShortVersionString") as? String
+    val build = info.objectForInfoDictionaryKey("CFBundleVersion") as? String
+    return when {
+        name.isNullOrBlank() -> ""
+        build.isNullOrBlank() -> name
+        else -> "$name ($build)"
+    }
 }
 
 private var cachedContainer: AppContainer? = null

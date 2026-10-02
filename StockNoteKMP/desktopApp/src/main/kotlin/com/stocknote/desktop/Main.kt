@@ -105,6 +105,9 @@ fun main() {
             App(
                 container = container,
                 versionLabel = VERSION_LABEL,
+                // 「关于」页的"最低系统要求"文案由外壳给（2026-10-02）：
+                // 此前该文案写死在 commonMain，桌面版也显示成 "Android 7.0+"。
+                platformLabel = "Windows 10+",
                 desktopShell = true,
                 shellHolder = shellHolder,
             )
@@ -112,7 +115,7 @@ fun main() {
     }
 }
 
-private const val VERSION_LABEL = "1.1.6 · 桌面版"
+private const val VERSION_LABEL = "1.1.8 · 桌面版"
 
 /**
  * 一级菜单 = 5 个页面（与 `Screen` 顺序一致）。

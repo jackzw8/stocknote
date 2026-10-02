@@ -70,6 +70,9 @@ kotlin {
 
         jvmTest.dependencies {
             implementation(kotlin("test"))
+            // P1-3（2026-10-02）：分红「错误体」用例要构造 **HTTP 200 + 指定响应体**，
+            // 只能靠 MockEngine（真接口触发不了限流/错误体）。版本跟 ktor 一致，**仅测试**、不进产物。
+            implementation(libs.ktor.client.mock)
         }
     }
 }

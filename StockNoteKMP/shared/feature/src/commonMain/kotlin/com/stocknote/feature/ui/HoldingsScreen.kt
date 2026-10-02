@@ -70,60 +70,16 @@ private fun HoldingsScreenContent(
     // 它原本挂在本页，而 App 默认落在「探索」页、统计页刷新时也不在本页 ——
     // 检测到了却弹不出来。现由 App 根部渲染，任何页面都能弹。
     val snapshot = state.snapshot
-    val positions = snapshot?.positions.orEmpty()
 
-    var filterIndex by remember { mutableIntStateOf(0) }
-    var sortIndex by remember { mutableIntStateOf(0) }
-    // 持仓搜索（老周反馈第 8 条 A 方案，2026-09-14）：🔍 展开，按名称/代码过滤
-    var searchText by remember { mutableStateOf("") }
-    var searchVisible by remember { mutableStateOf(false) }
-
-    // 「基金」筛选只对**账内**基金有意义（勾了「不计入统计」的基金在下面的「账外备忘」区，
-    // 不在这份持仓明细里）—— 老周 2026-09-20
-    val filters = listOf("全部", "A股", "港股", "美股", "ETF", "基金")
-    // 「占比 ↓」排序已按老周 2026-09-24 要求替换为「股息率 ↓」（累计分红÷持仓成本）；
-    // 同时新增「盈亏 ↑」（盈利从小到大），与「盈亏 ↓」并存
-    val sorts = listOf("市值 ↓", "盈亏 ↓", "盈亏 ↑", "成本 ↑", "股息率 ↓")
-
-    val visible = remember(positions, filterIndex, sortIndex, searchText, snapshot) {
-        // 占比分母是本位币总资产，分子同样要折算本位币（原币直接除会错配）——与 HoldingRow 显示口径一致
-        fun shareOf(p: Position): Double =
-            snapshot?.let { if (it.totalAsset > 0) it.positionMarketValueInBase(p) / it.totalAsset else 0.0 } ?: 0.0
-        // 股息率 = 累计分红 ÷ 持仓总成本（成本均价×数量，原币口径，同一标的内比较不失真）
-        fun dividendYield(p: Position): Double {
-            val cost = p.avgCost * p.quantity
-            return if (cost > 1e-9) p.dividendCash / cost else 0.0
-        }
-        val filtered = when (filters.getOrNull(filterIndex)) {
-            "A股" -> positions.filter { it.market == Market.A_SHARE }
-            "港股" -> positions.filter { it.market == Market.HK }
-            "美股" -> positions.filter { it.market == Market.US }
-            "ETF" -> positions.filter { it.market == Market.ETF }
-            "基金" -> positions.filter { it.market == Market.FUND }
-            else -> positions
-        }
-        val searched = if (searchText.isBlank()) filtered
-        else filtered.filter {
-            it.name.contains(searchText, ignoreCase = true) || it.symbol.contains(searchText, ignoreCase = true)
-        }
-        when (sorts.getOrNull(sortIndex)) {
-            "盈亏 ↓" -> searched.sortedByDescending { it.unrealizedPnl }
-            "盈亏 ↑" -> searched.sortedBy { it.unrealizedPnl }
-            "成本 ↑" -> searched.sortedBy { it.avgCost }
-            "股息率 ↓" -> searched.sortedByDescending { dividendYield(it) }
-            else -> searched.sortedByDescending { it.marketValue }
-        }
-    }
-
+    // 筛选 / 排序 / 查询 / 持仓明细列表已于 2026-10-02 整体迁到「持仓明细」页
+    // （AppRoute.HoldingsDetail，由本页「持仓 TOP5 › 全部」进入）；本页只留 TOP5 概览。
     val totalAsset = snapshot?.totalAsset ?: 0.0
-    val mvTotal = snapshot?.marketValueTotal ?: 0.0
-    val unrealTotal = snapshot?.unrealizedPnlTotal ?: 0.0
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 16.dp),
     ) {
-        // ---- 顶部栏：标题 + 头部按钮导航（记一笔 / 自选 / 日记）+ 搜索 ----
+        // ---- 顶部栏：标题 + 头部按钮导航（记一笔 / 自选 / 日记）----
         item {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(start = 18.dp, end = 18.dp, top = 4.dp, bottom = 10.dp),
@@ -171,62 +127,20 @@ private fun HoldingsScreenContent(
                         .clickable { AppNav.push(AppRoute.Diary) },
                     contentAlignment = Alignment.Center,
                 ) { Text("📝", fontSize = pageSp(14f), modifier = Modifier.semantics { contentDescription = "交易日记" }) }
-                Spacer(Modifier.width(8.dp))
-                // 🔍 搜索（展开后过滤持仓行）
-                Box(
-                    modifier = Modifier
-                        .size(34.dp)
-                        .clip(RoundedCornerShape(11.dp))
-                        .background(if (searchVisible) StockNoteColors.Brand else Color.White)
-                        .clickable {
-                            searchVisible = !searchVisible
-                            if (!searchVisible) searchText = ""
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("🔍", fontSize = pageSp(14f), modifier = Modifier.semantics { contentDescription = "搜索持仓" })
-                }
-            }
-        }
-
-        // ---- 搜索框（展开时）----
-        if (searchVisible) {
-            item {
-                LabeledField(
-                    label = "搜索持仓",
-                    value = searchText,
-                    onValueChange = { searchText = it },
-                    placeholder = "名称或代码",
-                    modifier = Modifier.padding(horizontal = 18.dp),
-                )
+                // 注：🔍 查询入口已于 2026-10-02 迁到「持仓明细」页（原在本页右上角）
             }
         }
 
         state.error?.let { item { ErrorBanner(message = it, onRetry = { }) } }
 
-        // ---- 汇总：持仓市值 / 持仓浮动盈亏，**上下两行**各自占满整行（老周 2026-09-20）----
-        // 注：老周 2026-09-16 起是左右并排两个半宽卡片；2026-09-20 要求改为上下分开，
-        // 整行后金额与副标题都有充足横向空间（金额统一 2 位小数后变长过）。
+        // ---- 汇总：今年收益（整行）----
+        // 「持仓市值 / 持仓浮动盈亏」两卡已于 2026-10-02 迁到统计页（紧贴统计页「持仓市值」下方），
+        // 本页汇总区只留「今年收益」。
         item {
             Column(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(11.dp),
             ) {
-                MetricCell(
-                    "持仓市值",
-                    Format.money(mvTotal),
-                    if (totalAsset > 0) "占总资产 ${Format.percent(mvTotal / totalAsset, signed = false)}" else "—",
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                MetricCell(
-                    "持仓浮动盈亏",
-                    Format.moneySigned(unrealTotal),
-                    Format.percent(
-                        if (mvTotal - unrealTotal > 0) unrealTotal / (mvTotal - unrealTotal) else null,
-                    ),
-                    valueColor = if (unrealTotal >= 0) StockNoteColors.Up else StockNoteColors.Down,
-                    modifier = Modifier.fillMaxWidth(),
-                )
                 // ---- 今年收益（老周 2026-09-28，放在「现金」卡片之上）----
                 // 口径（老周定「账户年内增值」）：今年收益 = 当前总资产 − 年初总资产 − 年内净入金；
                 // 今年收益率 = 账户年内 XIRR（期初 = 年初资产、期内 = 年内出入金、期末 = 当前总资产）。
@@ -254,7 +168,7 @@ private fun HoldingsScreenContent(
         }
 
         // ---- 现金（不计入持仓）----
-        // 老周 2026-09-19：由列表底部**上移到第二栏**（紧跟「持仓市值 / 浮动盈亏」汇总之后）
+        // 老周 2026-09-19：由列表底部**上移到第二栏**（紧跟汇总卡之后）
         item {
             Sec(
                 title = "现金 · 不计入持仓",
@@ -286,22 +200,23 @@ private fun HoldingsScreenContent(
             )
         }
 
-        // ---- 筛选 chips ----
-        item { ChipStrip(filters, filterIndex) { filterIndex = it } }
-        item { ChipStrip(sorts, sortIndex, topPad = 8) { sortIndex = it } }
-
-        // ---- 持仓明细 ----
-        item {
-            Sec(
-                title = "持仓明细（${visible.size}）",
-                more = "合计 ${Format.money(mvTotal)}",
-                modifier = Modifier.padding(top = 16.dp),
-            ) {
-                CardBox {
-                    if (visible.isEmpty()) {
-                        EmptyHint("这个筛选下没有持仓。")
-                    } else {
-                        visible.forEach { p -> HoldingRow(p, snapshot, onClick = { onOpenSecurity(p.securityId) }) }
+        // ---- 持仓 TOP5（老周 2026-10-02：从统计页迁到本页；右侧「全部 ›」进持仓明细页）----
+        // 筛选 / 排序 / 查询 / 完整明细列表都在「持仓明细」页（AppRoute.HoldingsDetail）。
+        if (snapshot != null && snapshot.positions.isNotEmpty()) {
+            item {
+                Sec(
+                    title = "持仓 TOP5",
+                    more = "全部 ›",
+                    onMore = { AppNav.push(AppRoute.HoldingsDetail) },
+                    modifier = Modifier.padding(top = 16.dp),
+                ) {
+                    CardBox {
+                        // 按**市值**降序取前 5。市值口径 = 折算本位币（与「持仓市值 / 占总资产」一致；
+                        // 港股/美股直接用原币市值比较会失真）。
+                        snapshot.positions
+                            .sortedByDescending { snapshot.positionMarketValueInBase(it) }
+                            .take(5)
+                            .forEach { p -> HoldingRow(p, snapshot, onClick = { onOpenSecurity(p.securityId) }) }
                     }
                 }
             }
@@ -404,60 +319,8 @@ private fun IconBox(glyph: String) {
     ) { Text(glyph, fontSize = pageSp(15f), color = StockNoteColors.TextSecondary) }
 }
 
-@Composable
-private fun ChipStrip(options: List<String>, selected: Int, topPad: Int = 13, onSelect: (Int) -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = topPad.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        options.forEachIndexed { i, label ->
-            val on = i == selected
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(if (on) Color(0xFFEAF1FE) else Color.White)
-                    .clickable { onSelect(i) }
-                    .padding(vertical = 7.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    label,
-                    fontSize = pageSp(12f),
-                    fontWeight = FontWeight.Bold,
-                    color = if (on) StockNoteColors.BrandDark else StockNoteColors.TextSecondary,
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun HoldingRow(p: Position, snap: com.stocknote.core.model.PortfolioSnapshot?, onClick: () -> Unit) {
-    val ratio = p.marketPrice?.let { price -> if (p.avgCost > 0) (price - p.avgCost) / p.avgCost else null }
-    // 占比分母是本位币总资产，分子同样要折算本位币（原币直接除会错配）
-    val share = snap?.let { if (it.totalAsset > 0) snap.positionMarketValueInBase(p) / it.totalAsset else null }
-    StockRow(
-        avatar = p.name.take(1),
-        name = p.name,
-        marketTag = p.market.label,
-        // 明细拆两行（老周 2026-09-21）：第 1 行「数量 · 成本」，第 2 行「现价 · 占比」
-        detail = "${Format.quantity(p.quantity)}${p.market.quantityUnit} · 成本 ${Format.money(p.avgCost, "")}",
-        detail2 = "现 ${p.marketPrice?.let { Format.money(it, "") } ?: "—"}" +
-            (share?.let { " · 占比 ${Format.percent(it, signed = false)}" } ?: ""),
-        // 2026-09-17 B 方案（老周定）：**金额统一 2 位小数**。
-        // StockRow 已改纵向四行、价格独占一行，加宽不会再挤压名称列。
-        // 百分比仍保留 1 位（列表行紧凑）
-        priceText = Format.money(p.marketValue, p.currency.symbol),
-        pnlText = Format.moneySigned(p.unrealizedPnl, p.currency.symbol) +
-            " · " + Format.percent(ratio, decimals = 1),
-        pnlPositive = p.unrealizedPnl >= 0,
-        // 图标按市场上色（老周 2026-09-21）：与下面「配置占比」环形图同一套色
-        market = p.market,
-        avatarTinted = p.unrealizedPnl < 0,
-        onClick = onClick,
-    )
-}
+// ChipStrip（筛选/排序 chips）与 HoldingRow（持仓明细行）已于 2026-10-02
+// 随「持仓明细」列表迁到 `HoldingsDetailScreen.kt`（在本页为 TOP5 复用，故为 internal）。
 
 @Composable
 private fun CashRow(

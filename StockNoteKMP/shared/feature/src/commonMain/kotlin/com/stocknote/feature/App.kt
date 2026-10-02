@@ -54,6 +54,7 @@ import com.stocknote.feature.ui.DiaryScreen
 import com.stocknote.feature.ui.DividendAlertHost
 import com.stocknote.feature.ui.DividendScreen
 import com.stocknote.feature.ui.FxRateScreen
+import com.stocknote.feature.ui.HoldingsDetailScreen
 import com.stocknote.feature.ui.HoldingsScreen
 import com.stocknote.feature.ui.PlanEditScreen
 import com.stocknote.feature.ui.PlanScreen
@@ -84,7 +85,16 @@ import com.stocknote.feature.ui.rememberWatchlistHolder
 @Composable
 fun App(
     container: AppContainer,
+    /**
+     * 版本号：**由各平台外壳传入**（单一来源）—— 显示在「关于」页，并写进导出运行日志的头部。
+     * Android = `BuildConfig.VERSION_NAME/VERSION_CODE`；iOS = `Info.plist`；桌面 = `:desktopApp` 常量。
+     */
     versionLabel: String = "",
+    /**
+     * 该平台的最低系统要求（老周 2026-10-02）：此前「关于」页把 `"Android 7.0+"` **写死在 commonMain**，
+     * iOS 装出来也显示成 Android —— 所以改成由外壳传入，Android 直接吃默认值。
+     */
+    platformLabel: String = "Android 7.0+",
     /**
      * **桌面外壳模式**（老周 2026-09-30）：隐藏底部导航栏。
      *
@@ -224,7 +234,9 @@ fun App(
             }
 
             is AppRoute.About -> {
-                Box(Modifier.fillMaxSize().background(StockNoteColors.Background)) { AboutScreen(versionLabel = versionLabel) }
+                Box(Modifier.fillMaxSize().background(StockNoteColors.Background)) {
+                    AboutScreen(versionLabel = versionLabel, platformLabel = platformLabel)
+                }
             }
 
 is AppRoute.CashFlow -> {
@@ -503,6 +515,17 @@ is AppRoute.CashFlow -> {
                 }
             }
 
+            // ---- 持仓明细（老周 2026-10-02）：持仓页「持仓 TOP5 › 全部」进入的二级页 ----
+            is AppRoute.HoldingsDetail -> {
+                Box(Modifier.fillMaxSize().background(StockNoteColors.Background)) {
+                    HoldingsDetailScreen(
+                        state = state,
+                        onOpenSecurity = { AppNav.push(AppRoute.SecurityDetail(it)) },
+                        onBack = { AppNav.pop() },
+                    )
+                }
+            }
+
             null -> MainTabs(
                 state = state,
                 holder = holder,
@@ -541,7 +564,7 @@ is AppRoute.CashFlow -> {
  *
  * 用 [HorizontalPager] 承载，底部 tab 与滑动**双向同步**：
  *  - 滑动落定 → `holder.select(该页)`；
- *  - 外部切页（如统计页「持仓 TOP5 › 全部」）→ 动画滚到对应页。
+ *  - 外部切页（如底部 tab / 「🎯 查看计划」）→ 动画滚到对应页。
  *
  * `beyondViewportPageCount = 3` = 四个页面**都留在组合里**：否则滑走的页面会被销毁，
  * 回来时 `remember` 的筛选 / 排序 / 搜索词全部复位（体验像"被重置了"）。

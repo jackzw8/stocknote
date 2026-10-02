@@ -34,11 +34,18 @@ import com.stocknote.feature.theme.StockNoteColors
 /**
  * 关于本应用（REQ-TOOL-04，P0）。
  * 版本号取自打包产物常量，避免两处不一致（单一来源原则）。
+ *
+ * @param versionLabel 版本号，**由各平台外壳传入**（单一来源）：
+ *   Android = `BuildConfig.VERSION_NAME/VERSION_CODE`；iOS = `Info.plist` 的
+ *   `CFBundleShortVersionString/CFBundleVersion`；桌面 = `:desktopApp` 的常量。
+ * @param platformLabel 该平台的最低系统要求（老周 2026-10-02 报「iOS 上看不到版本号」时一并修掉）：
+ *   此前这里**写死了 "Android 7.0+"**，于是 iOS 一栏显示的是「— · Android 7.0+」——
+ *   既没有版本号（iOS 外壳没传），平台也写错了。
  */
 @Composable
-private fun AboutScreenContent(versionLabel: String = "") {
-    // 版本号来自打包产物（MainActivity 从 BuildConfig 传入），单一来源
-    val versionText = if (versionLabel.isEmpty()) "— · Android 7.0+" else "$versionLabel · Android 7.0+"
+private fun AboutScreenContent(versionLabel: String = "", platformLabel: String = "Android 7.0+") {
+    // 版本号来自打包产物（Android 从 BuildConfig / iOS 从 Info.plist 传入），单一来源
+    val versionText = if (versionLabel.isEmpty()) "— · $platformLabel" else "$versionLabel · $platformLabel"
     LazyColumn(
         modifier = Modifier.fillMaxSize().background(StockNoteColors.Background),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
@@ -199,8 +206,8 @@ private fun AboutScreenContent(versionLabel: String = "") {
 
 /** 整页字号放大 1.2 倍（老周 2026-09-21，与统计页一致；未包的页面默认 1f 不受影响）。 */
 @Composable
-fun AboutScreen(versionLabel: String = "") {
+fun AboutScreen(versionLabel: String = "", platformLabel: String = "Android 7.0+") {
     androidx.compose.runtime.CompositionLocalProvider(LocalPageTextScale provides PAGE_TEXT_SCALE) {
-        AboutScreenContent(versionLabel)
+        AboutScreenContent(versionLabel, platformLabel)
     }
 }

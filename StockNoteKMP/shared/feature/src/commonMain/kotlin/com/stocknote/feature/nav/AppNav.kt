@@ -48,6 +48,15 @@ sealed interface AppRoute {
     /** 添加自选 · 搜索多选（原型 13c） */
     data object WatchlistAdd : AppRoute
 
+    /**
+     * 持仓明细（老周 2026-10-02）。
+     *
+     * 从持仓页「持仓 TOP5 › 全部」进入的**二级页**（不带底部导航）。
+     * 完整持仓列表 + 筛选 / 排序 / 查询都在这里，每页 10 条分页显示；
+     * 原挂在持仓页的 🔍 查询入口也已随之迁入。
+     */
+    data object HoldingsDetail : AppRoute
+
     /** 交易日记（原型 07：日记列表 + 月度复盘区） */
     data object Diary : AppRoute
 

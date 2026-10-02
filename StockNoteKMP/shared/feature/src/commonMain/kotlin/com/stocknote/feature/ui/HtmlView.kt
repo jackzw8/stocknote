@@ -8,7 +8,8 @@ import androidx.compose.ui.Modifier
  * 服务端只给空壳、由 JS 渲染），抓 HTML 拿不到内容，所以直接内嵌网页渲染。
  *
  *  - **Android**：内嵌 [android.webkit.WebView]（站内跳转，不跳出应用）
- *  - **iOS**：暂用系统浏览器打开（WKWebView 内嵌待后续替换，见 iosMain 的实现注释）
+ *  - **iOS**：内嵌 `WKWebView`（老周 2026-10-02 补齐；此前是"跳系统浏览器"的临时方案）
+ *  - **桌面**：内嵌 JavaFX `WebView`（SwingPanel + JFXPanel）
  */
 @Composable
 expect fun HtmlView(url: String, modifier: Modifier = Modifier)
@@ -45,7 +46,8 @@ expect fun rememberBrowserOpener(): (String) -> Unit
  * 定时重复 25 次 × 400ms（约 10 秒）+ 滚动时补注入：SPA 渲染与滚动懒加载都会后插节点。
  *
  * ⚠️ 平台接入方式不同但脚本同一份：Android 在 `onPageFinished` + 延迟兜底里 `evaluateJavascript`；
- * 桌面（JavaFX）在 `LoadWorker` 变为 `SUCCEEDED` 时 `engine.executeScript`。
+ * 桌面（JavaFX）在 `LoadWorker` 变为 `SUCCEEDED` 时 `engine.executeScript`；
+ * iOS（WKWebView）在 `didFinishNavigation` 里 `evaluateJavaScript`。
  */
 internal const val CleanPageJs = """
 (function(){

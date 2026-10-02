@@ -115,7 +115,7 @@ jobs:
         working-directory: StockNoteKMP
         run: |
           echo "===== ① 仓库里的 Info.plist 关键键（文件本身没问题吧？）====="
-          for k in CADisableMinimumFrameDurationOnPhone CFBundleShortVersionString CFBundleVersion CFBundleDisplayName UILaunchScreen; do
+          for k in CADisableMinimumFrameDurationOnPhone CFBundleShortVersionString CFBundleVersion CFBundleDisplayName CFBundleIconName UILaunchScreen; do
             printf '%-45s = ' "$k"
             /usr/libexec/PlistBuddy -c "Print :$k" iosApp/iosApp/Info.plist 2>/dev/null || echo "!!! 缺失 !!!"
           done
@@ -152,6 +152,59 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             archive
+
+      # ⚠️ P0-1（2026-10-02）：接入 SQLCipher 后，**最危险的失败方式是"静默写成明文"**——
+      # 少了 `-lsqlite3` 但 SQLCipher 又没链上时，符号可能从别处解析，`PRAGMA key` 变成空操作。
+      # 归档成功 ≠ 加密生效，所以这里直接查产物（不是查配置）。
+      - name: 校验 SQLCipher 真的链上了（P0-1）
+        if: ${{ !inputs.build_simulator }}
+        run: |
+          set -u
+          APP="$RUNNER_TEMP/StockNoteApp.xcarchive/Products/Applications/StockNoteApp.app"
+          BIN="$APP/StockNoteApp"
+          echo "===== ① 不能再依赖系统 libsqlite3（它没有加密能力）====="
+          otool -L "$BIN" | sed -n '1,40p'
+          if otool -L "$BIN" | grep -q 'libsqlite3'; then
+            echo "!!! 仍然链接了系统 libsqlite3 —— SQLCipher 的 PRAGMA key 会静默失效，库仍是明文 !!!"
+            exit 1
+          fi
+          echo "OK：未依赖 /usr/lib/libsqlite3.dylib"
+
+          echo "===== ② 二进制里必须有 SQLCipher 的标记串 ====="
+          if strings -a "$BIN" | grep -m3 -i 'cipher_version'; then
+            echo "OK：找到 cipher_version（SQLCipher 的 pragma 名）"
+          else
+            echo "!!! 没找到 SQLCipher 标记 —— 很可能根本没链上 !!!"
+            exit 1
+          fi
+
+          echo "===== ③ 未解析的 sqlite3_* 符号（仅参考：release 会 strip，可能为空）====="
+          nm -u "$BIN" 2>/dev/null | grep '_sqlite3_' | head -20 || echo "(无)"
+
+      # ⚠️ P1-5（2026-10-02）：图标这类**资源**问题不会让归档失败（装出来只是白图标），
+      # 所以必须查产物。之前项目在 `iosApp/` 下**根本没有 Assets.xcassets**。
+      - name: 校验 App 图标进了包（P1-5）
+        if: ${{ !inputs.build_simulator }}
+        run: |
+          set -u
+          APP="$RUNNER_TEMP/StockNoteApp.xcarchive/Products/Applications/StockNoteApp.app"
+          echo "===== ① 编译后的资源目录 ====="
+          ls -1 "$APP" | sed -n '1,60p'
+          test -f "$APP/Assets.car" && echo "OK：Assets.car 存在" || { echo "!!! 没有 Assets.car !!!"; exit 1; }
+
+          echo "===== ② Info.plist 的图标键 ====="
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "$APP/Info.plist" \
+            || { echo "!!! Info.plist 缺 CFBundleIconName !!!"; exit 1; }
+          # ⚠️ 图标 PNG 由 actool 生成到 bundle 根目录。但**不能拿它当硬断言**：
+          # 新版 Xcode 可能只留 Assets.car（不再往根目录放 AppIcon*.png）——
+          # 那属于"换了实现"，不代表图标坏了，所以这里只提示、不失败。
+          ls "$APP" | grep -i '^AppIcon' || echo "(根目录无 AppIcon*.png —— 新版 Xcode 可能只留 Assets.car，非致命)"
+          # 硬判据只有上面两条：Assets.car 存在 + Info.plist 有 CFBundleIconName。
+          # （图标本身对不对只能靠真机看 —— 这类问题不会让归档失败。）
+
+          echo "===== ③ 版本号（应仍是 1.1.8 / 58）====="
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP/Info.plist"
 
       - name: 打成未签名 IPA
         if: ${{ !inputs.build_simulator }}

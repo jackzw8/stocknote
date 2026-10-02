@@ -10,6 +10,10 @@
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<!-- P1-5（2026-10-02）：App 图标。指向 Assets.xcassets 里的图集名（= 上面的
+	     ASSETCATALOG_COMPILER_APPICON_NAME）。这一项同时是 App Store 校验要求的键。 -->
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>

@@ -65,6 +65,84 @@ object DividendSource {
 
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
+    // ---------------------------------------------------------------- 响应体合法性（P1-3，老周 2026-10-02）
+
+    /**
+     * 东财数据中心「查询成功但结果为空」的官方 `code`。
+     * 实测（2026-10-02）：**没有分红历史的标的**（如 830799）= 9201；
+     * **代码查不到**（999999）= 9201；**美股交易所猜错**（AAPL.N）= 9201 → 三者同形。
+     */
+    private const val EM_EMPTY_CODE = 9201
+
+    /**
+     * **东财数据中心（A股 `RPT_SHAREBONUS_DET` / 美股 `RPT_USF10_INFO_DIVIDEND`）响应能不能当查询结果用**。
+     *
+     * ## 为什么需要它（P1-3）
+     * 此前 [QuoteClient.fetchCnDividends] 等只看「请求没抛异常」就当成功，于是**错误体**会被
+     * 解析成空列表，与「确认没有分红」**完全同形** → 用户永远等不到提示（静默漏检）。
+     *
+     * ## ⚠️ 判据是 `code`，**不是** `result == null`（实测结论，推翻了原计划的假设）
+     * 实测（curl，2026-10-02，HTTP 全部 200）：
+     * ```
+     * 有数据：{"result":{"pages":1,"data":[…],"count":28},"success":true,"message":"ok","code":0}
+     * 无数据：{"version":null,"result":null,"success":false,"message":"返回数据为空","code":9201}
+     * 参数错：{"version":null,"result":null,"success":false,"message":"报表配置不存在,…","code":9501}
+     * ```
+     * ⇒ **东财「确实没有数据」时 `result` 本来就是 `null`**。若把 `result:null` 一律判失败，
+     * 则每一个「没有分红历史」的标的每次扫描都会报「取数失败，可能漏检」——
+     * 从"静默漏检"变成"每次都误报"，对用户更糟。
+     * 真正的分界是 `code`：`9201` = 查询成功、结果为空（可当"无分红"）；`0` = 有数据；
+     * 其它（如 9501 报表配置错、限流/WAF 返回的非 0 码）= **明确失败**。
+     *
+     * ## 已知边界（如实记录，不赌）
+     * 若东财限流**恰好**返回 `code:9201 + "返回数据为空"`，本判据无法与"真的没有数据"区分 ——
+     * 但限流通常伴随 403（Ktor 会抛异常）或其它 code，这类都能被下面的规则拦下。
+     * 另外 `code` 缺省时（退回结构判断）只要求 `result.data` 是数组：
+     * **`data: []` 属于「成功且确实没分红」**，只有"连 data 段都没有"才算结构不完整。
+     */
+    fun eastmoneyOk(text: String): Boolean {
+        val root = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return false
+        val code = (root["code"] as? JsonPrimitive)?.content?.toIntOrNull()
+        if (code == EM_EMPTY_CODE) return true
+        if (code != null && code != 0) return false
+        if ((root["success"] as? JsonPrimitive)?.content?.equals("false", ignoreCase = true) == true) return false
+        return (root["result"] as? JsonObject)?.get("data") is JsonArray
+    }
+
+    /**
+     * **腾讯港股 K 线响应是否真的拿到了 K 线**（P1-3）。
+     *
+     * 实测（2026-10-02，HTTP 200）：
+     * ```
+     * 有效代码：{"code":0,"msg":"","data":{"hk00700":{"qfqday":[…1200 根…]}}}
+     * 无效代码：{"code":0,"msg":"","data":{"hk99999":{"day":[],"qt":{…}}}}   ← day 为空、无 qfqday
+     * 参数错　：{"code":1,"msg":"bad params"}
+     * ```
+     * 判据：`code == 0`（缺省放行）且 `data.<symbol>` 存在、其 `qfqday`/`day` 是**非空**数组。
+     * 有效的港股代码必然有 K 线 —— **拿不到 K 线就是取数失败**，不能当成"没有分红"
+     * （注意区分：K 线有、只是行里没有 `cqr`/`FHcontent` 字段 = 真的没有分红）。
+     */
+    fun tencentKlineOk(text: String, symbol: String): Boolean {
+        val root = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return false
+        val code = (root["code"] as? JsonPrimitive)?.content?.toIntOrNull()
+        if (code != null && code != 0) return false
+        val node = (root["data"] as? JsonObject)?.get(symbol) as? JsonObject ?: return false
+        val kline = (node["qfqday"] ?: node["day"]) as? JsonArray ?: return false
+        return kline.isNotEmpty()
+    }
+
+    /**
+     * **天天基金 F10 分红页是否是正常页面**（P1-3）。
+     *
+     * 该源是**服务端渲染 HTML**（URL 形如 `fundf10.eastmoney.com/fhsp_<代码>.html`），没有 JSON 信封、
+     * 也没有错误码可判 —— 正常页面的标题/关键字必然含「分红送配」四个字，被拦截或返回异常页时不含。
+     * 故用**这一条**当作"页面正常"的判据（宁可提示"可能漏检"，也不要静默漏检 —— P1-3 的取向）。
+     *
+     * ⚠️ 已知边界：**代码不存在时天天基金照样渲染一个正常页面**（实测 999999：「(999999)基金分红送配…」，
+     * 正文无分红行）→ 这种情况会被判为「成功但无分红」。无法区分，如实记录。
+     */
+    fun cnFundDividendPageOk(html: String): Boolean = html.contains("分红送配")
+
     // ---------------------------------------------------------------- A股（东财，税前）
 
     /**

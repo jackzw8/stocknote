@@ -356,7 +356,10 @@ class QuoteClient(
                 // 天天基金会对无 Referer 的直连做拦截（实测），必须带上
                 header("Referer", "https://fund.eastmoney.com/")
             }.bodyAsText()
-            DividendFetch.ok(DividendSource.parseCnFundDividend(text, symbol))
+            // ⚠️ P1-3（2026-10-02）：先判"拿到的到底是不是那个分红页"。
+            // 拦截页/异常页照样是 HTTP 200，此前会被解析成空列表 = "确认无分红"（静默漏检）。
+            if (!DividendSource.cnFundDividendPageOk(text)) DividendFetch.FAILED
+            else DividendFetch.ok(DividendSource.parseCnFundDividend(text, symbol))
         }.getOrElse { DividendFetch.FAILED }
     }
 
@@ -415,7 +418,11 @@ class QuoteClient(
                 parameter("sortColumns", "EX_DIVIDEND_DATE")
                 parameter("sortTypes", "-1")
             }.bodyAsText()
-            DividendFetch.ok(DividendSource.parseCnBonus(text, symbol))
+            // ⚠️ P1-3（2026-10-02）：东财「限流 / 参数错」也是 HTTP 200，错误体解析出来就是空列表
+            // → 与"确认无分红"同形。判据是响应里的 `code`（9201 = 确实没数据；其它非 0 = 失败），
+            // 详见 [DividendSource.eastmoneyOk]。
+            if (!DividendSource.eastmoneyOk(text)) DividendFetch.FAILED
+            else DividendFetch.ok(DividendSource.parseCnBonus(text, symbol))
         }.getOrElse { DividendFetch.FAILED }
     }
 
@@ -437,7 +444,10 @@ class QuoteClient(
             val text: String = http.get(HK_DIVIDEND_ENDPOINT) {
                 parameter("param", "$symbol,day,,,1200,qfq")
             }.bodyAsText()
-            DividendFetch.ok(DividendSource.parseHkBonus(text, symbol))
+            // ⚠️ P1-3（2026-10-02）：腾讯参数错是 `{"code":1,"msg":"bad params"}`（HTTP 200）、
+            // 代码无效则 `day` 为空数组 —— 两者都不能当成"确认无分红"。
+            if (!DividendSource.tencentKlineOk(text, symbol)) DividendFetch.FAILED
+            else DividendFetch.ok(DividendSource.parseHkBonus(text, symbol))
         }.getOrElse { DividendFetch.FAILED }
     }
 
@@ -456,7 +466,7 @@ class QuoteClient(
         val (code, suffixes) = usSecuCode(symbol) ?: return DividendFetch.FAILED
         var reached = false
         for (suffix in suffixes) {
-            val parsed = runCatching {
+            val fetched = runCatching {
                 val text: String = http.get(US_F10_ENDPOINT) {
                     parameter("reportName", "RPT_USF10_INFO_DIVIDEND")
                     parameter("columns", US_DIVIDEND_COLUMNS)
@@ -468,10 +478,16 @@ class QuoteClient(
                     parameter("source", "SECURITIES")
                     parameter("client", "PC")
                 }.bodyAsText()
-                DividendSource.parseUsBonus(text, symbol)
+                // ⚠️ P1-3（2026-10-02）：**必须把「信封合法性」和「解析结果」分开带出来**。
+                // 此前只取解析结果、失败即 `continue`，于是「限流/参数错的错误体」会被当成
+                // "这个交易所没有该标的"，三个后缀都试完 → reached=true → 误判成「确认无分红」。
+                // 实测：交易所猜错（AAPL.N）东财返回 `code:9201 + 返回数据为空`（= 真的没这个代码的数据），
+                // 只有 `code` 非 0 且非 9201 的错误体才算"没请求成功"。
+                DividendSource.eastmoneyOk(text) to DividendSource.parseUsBonus(text, symbol)
             }.getOrNull() ?: continue
+            if (!fetched.first) continue
             reached = true
-            if (parsed.isNotEmpty()) return DividendFetch.ok(parsed)
+            if (fetched.second.isNotEmpty()) return DividendFetch.ok(fetched.second)
         }
         // 请求过但都没数据 = 确认无分红；一次都没请求成功 = 失败（供上层区分展示）
         return if (reached) DividendFetch.ok(emptyList()) else DividendFetch.FAILED
