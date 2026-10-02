@@ -144,6 +144,14 @@ class PortfolioRepository(
                 fetched.forEach { (symbol, quote) ->
                     writeQuote(symbol, quote)
                     prices[symbol] = quote.price
+                    // ⚠️ 2026-10-02 修复（老周报「统计页当日盈亏 ≠ 盈亏日历当日盈亏」）：
+                    // **昨收也必须跟着刷新**。`prevCloses` 是上面从 `quote` 表读出来的 ——
+                    // 那是**上一次刷新**落库的值；这里若只更新 `prices`，`dayPnl`
+                    // （统计页「当日盈亏」）与持仓 TOP5 的「当日涨跌%」就会用**旧一天的昨收**。
+                    // 表现：每天**冷启动的第一次刷新**，当日盈亏实际是**两天的涨跌**（明显偏大），
+                    // 同日再刷新一次才变正确 —— 而盈亏日历走的是「逐日总资产差分」，天然是一天的，
+                    // 两者必然对不上。下方场外基金那条分支一直是对的，两支写法原先不一致。
+                    quote.prevClose?.let { prevCloses[symbol] = it }
                 }
             }
             funds.forEach { sec ->

@@ -696,7 +696,11 @@ class QuoteClient(
             t.substringAfter("=\"", "").substringBeforeLast("\"").split("~").getOrNull(3)?.toDoubleOrNull()
         }.getOrNull()
 
-        println("[SN_SCAN] risk " + symbol + " price=" + raw.price + " debt=" + raw.debtRatio + " pe=" + raw.marketCap)
+        // P2-6：扫雷/巨潮的取数结果收进运行日志（此前只 println，用户「导出运行日志」里看不到）
+        com.stocknote.data.log.SnLog.i(
+            "SN_SCAN",
+            "risk $symbol price=${raw.price} debt=${raw.debtRatio} pe=${raw.marketCap}",
+        )
         return raw.toInput()
     }
 
@@ -756,7 +760,7 @@ class QuoteClient(
         }.getOrDefault(emptyMap())
         val sue = one(CNINFO_SUE_URL)
         val gte = one(CNINFO_GTE_URL)
-        println("[SN_SCAN] cninfo sue=" + sue.size + " gte=" + gte.size)
+        com.stocknote.data.log.SnLog.i("SN_SCAN", "cninfo sue=${sue.size} gte=${gte.size}")
         return sue to gte
     }
 
@@ -839,7 +843,10 @@ class QuoteClient(
             buybackText = bbText,
             price = price,
         )
-        println("[SN_SCAN] hk " + symbol + " price=" + price + " debt=" + input.debtRatio + " roe=" + input.roe)
+        com.stocknote.data.log.SnLog.i(
+            "SN_SCAN",
+            "hk $symbol price=$price debt=${input.debtRatio} roe=${input.roe}",
+        )
         return input
     }
 

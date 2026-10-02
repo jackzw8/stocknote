@@ -22,7 +22,6 @@ import androidx.compose.ui.viewinterop.UIKitInteropInteractionMode
 import androidx.compose.ui.viewinterop.UIKitInteropProperties
 import androidx.compose.ui.viewinterop.UIKitView
 import com.stocknote.data.log.SnLog
-import com.stocknote.data.platform.nativeLog
 import kotlinx.cinterop.ObjCSignatureOverride
 import platform.Foundation.NSError
 import platform.Foundation.NSURL
@@ -82,8 +81,11 @@ actual fun HtmlView(url: String, modifier: Modifier) {
                 webView.evaluateJavaScript(CleanPageJs) { _, error ->
                     // ⚠️ 只取 `code`，不用 `localizedDescription`（同上：避免用到需要额外 import 的
                     //    Foundation 扩展属性）。日志里有个错误码足够定位。
-                    nativeLog(
-                        "[SN_CLEAN] iOS 注入清理脚本：" +
+                    // P2-6：改走 SnLog —— iOS 上 `println`/原生 `nativeLog` **不进运行日志缓冲**，
+                    // 而真机取证唯一可靠渠道就是「导出运行日志」（见《项目经验》§3）。
+                    SnLog.i(
+                        "SN_CLEAN",
+                        "iOS 注入清理脚本：" +
                             (if (error == null) "已执行" else "失败 code=" + error.code),
                     )
                 }

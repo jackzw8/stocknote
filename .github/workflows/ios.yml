@@ -236,23 +236,57 @@ jobs:
           set -u
           APP="$RUNNER_TEMP/StockNoteApp.xcarchive/Products/Applications/StockNoteApp.app"
           BIN="$APP/StockNoteApp"
-          echo "===== ① 不能再依赖系统 libsqlite3（它没有加密能力）====="
+          FW="$APP/Frameworks/SQLCipher.framework/SQLCipher"
+
+          # ⚠️⚠️ 2026-10-02 第 6 轮实测修正（run 37003261045）：SQLCipher 经 SwiftPM 进来的是
+          # **动态 framework**（otool -L 显示 @rpath/SQLCipher.framework/SQLCipher）—— 加密实现与
+          # 字符串（含 cipher_version）都在 Frameworks/SQLCipher.framework 里，**不在主二进制里**。
+          # 旧版护栏拿 strings 查主二进制，把"链上了"误判成"没链上"。
+          # 正确姿势：① 主二进制链 SQLCipher.framework 且不得出现系统 libsqlite3；
+          #           ② framework 必须被嵌入 app（没嵌 → 真机启动即 dyld 闪退）；
+          #           ③ cipher_version 标记串去 framework 的二进制里找。
+
+          echo "===== ① 主二进制：必须链 SQLCipher.framework，且不得出现系统 libsqlite3 ====="
           otool -L "$BIN" | sed -n '1,40p'
           if otool -L "$BIN" | grep -q 'libsqlite3'; then
-            echo "!!! 仍然链接了系统 libsqlite3 —— SQLCipher 的 PRAGMA key 会静默失效，库仍是明文 !!!"
+            echo "!!! 仍然链接了系统 libsqlite3 —— PRAGMA key 会静默失效，库仍是明文 !!!"
             exit 1
           fi
-          echo "OK：未依赖 /usr/lib/libsqlite3.dylib"
+          if ! otool -L "$BIN" | grep -q 'SQLCipher.framework'; then
+            echo "!!! 主二进制没有链接 SQLCipher.framework !!!"
+            exit 1
+          fi
+          echo "OK：链接的是 @rpath/SQLCipher.framework，未依赖系统 libsqlite3"
 
-          echo "===== ② 二进制里必须有 SQLCipher 的标记串 ====="
-          if strings -a "$BIN" | grep -m3 -i 'cipher_version'; then
+          echo "===== ② SQLCipher.framework 必须被嵌入 app（否则真机启动即 dyld 闪退）====="
+          if [ ! -f "$FW" ]; then
+            echo "!!! bundle 里没有 Frameworks/SQLCipher.framework/SQLCipher !!!"
+            ls -1 "$APP/Frameworks" 2>/dev/null || echo "(Frameworks 目录不存在)"
+            exit 1
+          fi
+          echo "OK：已嵌入（大小 $(du -h "$FW" | cut -f1)）"
+
+          echo "===== ③ cipher_version 标记串去 framework 二进制里找 ====="
+          if strings -a "$FW" | grep -m3 -i 'cipher_version'; then
             echo "OK：找到 cipher_version（SQLCipher 的 pragma 名）"
           else
-            echo "!!! 没找到 SQLCipher 标记 —— 很可能根本没链上 !!!"
+            echo "!!! SQLCipher.framework 里没有 cipher_version 标记 !!!"
             exit 1
           fi
 
-          echo "===== ③ 未解析的 sqlite3_* 符号（仅参考：release 会 strip，可能为空）====="
+          echo "===== ④ 附带：Kotlin 侧 SharedUI.framework 也不得指向系统 sqlite3 ====="
+          SU="$APP/Frameworks/SharedUI.framework/SharedUI"
+          if [ -f "$SU" ]; then
+            if otool -L "$SU" | grep -q 'libsqlite3'; then
+              echo "!!! SharedUI.framework 链了系统 libsqlite3 !!!"
+              exit 1
+            fi
+            echo "OK：SharedUI.framework 未依赖系统 libsqlite3"
+          else
+            echo "(没找到 SharedUI.framework，跳过 ④ —— 请人工确认)"
+          fi
+
+          echo "===== ⑤ 未解析的 sqlite3_* 符号（仅参考：release 会 strip，可能为空）====="
           nm -u "$BIN" 2>/dev/null | grep '_sqlite3_' | head -20 || echo "(无)"
 
       # ⚠️ P1-5（2026-10-02）：图标这类**资源**问题不会让归档失败（装出来只是白图标），

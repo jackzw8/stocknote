@@ -78,9 +78,11 @@ actual fun HtmlView(url: String, modifier: Modifier) {
                     override fun onPageFinished(view: WebView, finishedUrl: String?) {
                         super.onPageFinished(view, finishedUrl)
                         // 诊断：确认回调确实到了、脚本确实执行了（拿 evaluateJavascript 的回调）
-                        println("[SN_CLEAN] onPageFinished url=" + finishedUrl)
+                        // P2-6：这些 [SN_CLEAN] 诊断改走 SnLog（进运行日志环形缓冲，「导出运行日志」可带出）；
+                        // 此前是 println，只进 logcat，用户拿不到。
+                        SnLog.i("SN_CLEAN", "onPageFinished url=$finishedUrl")
                         view.evaluateJavascript(CleanPageJs) { result ->
-                            println("[SN_CLEAN] evalResult=" + result)
+                            SnLog.i("SN_CLEAN", "evalResult=$result")
                         }
                     }
                 }
@@ -89,14 +91,14 @@ actual fun HtmlView(url: String, modifier: Modifier) {
                 postDelayed({
                     runCatching {
                         evaluateJavascript(CleanPageJs) { result ->
-                            println("[SN_CLEAN] evalDelay=" + result)
+                            SnLog.i("SN_CLEAN", "evalDelay=$result")
                         }
                     }
                 }, 1500)
-                // 只为把清理脚本的执行结果打到 logcat（排查用），不接管页面行为
+                // 只为把清理脚本的执行结果打进运行日志（排查用），不接管页面行为
                 webChromeClient = object : WebChromeClient() {
                     override fun onConsoleMessage(m: ConsoleMessage): Boolean {
-                        println("[SN_CLEAN] " + m.message())
+                        SnLog.i("SN_CLEAN", m.message())
                         return true
                     }
                 }
