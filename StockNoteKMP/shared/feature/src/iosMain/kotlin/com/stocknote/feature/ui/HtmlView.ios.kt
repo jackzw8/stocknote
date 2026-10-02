@@ -191,6 +191,12 @@ private class WebViewNavigationDelegate(
         onFinished(webView)
     }
 
+    /**
+     * ⚠️ **这两个 `didFail*` 必须都带 `@ObjCSignatureOverride`**（2026-10-02 CI 实测）：
+     * 冲突是**双向**的 —— 只给新加的那个加注解，编译器仍会在**另一个**上报
+     * `Conflicting overloads`（报错行号指的是**没有注解的那个**，很容易看反）。
+     */
+    @ObjCSignatureOverride
     override fun webView(
         webView: WKWebView,
         didFailProvisionalNavigation: WKNavigation?,

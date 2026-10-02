@@ -295,13 +295,26 @@ class PlanEditHolder(
                 else -> Market.A_SHARE
             }
             val currency = Currency.entries.firstOrNull { it.code == hit.currencyCode } ?: Currency.CNY
-            val security = security.findOrCreateSecurity(
-                symbol = hit.symbol,
-                name = hit.name,
-                market = market,
-                currency = currency,
-            )
-            pick(security)
+            // ⚠️ P1-35（2026-10-02）：原来是**裸调** —— 建标的一抛异常协程体就结束，
+            // 表现为「点了候选没反应」（选不中、无提示、无日志）。与 TradeFormHolder 同型，一起补上。
+            val created = runCatching {
+                security.findOrCreateSecurity(
+                    symbol = hit.symbol,
+                    name = hit.name,
+                    market = market,
+                    currency = currency,
+                )
+            }.onFailure { e ->
+                com.stocknote.data.log.SnLog.e("PLAN_EDIT", "选中联网候选失败：建标的 ${hit.symbol}", e)
+                _state.update {
+                    it.copy(
+                        error = "选中「${hit.name}」失败：" +
+                            (e.message ?: e::class.simpleName ?: "未知错误"),
+                    )
+                }
+            }.getOrNull()
+            if (created == null) return@launch
+            pick(created)
         }
     }
 

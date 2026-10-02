@@ -197,10 +197,13 @@ class TradeFormHolder(
             val next = when {
                 editTxId != null -> {
                     // 编辑态：回填已有值，标的名锁定
-                    val detail = securityId?.let { repo.loadSecurityDetail(it) }
+                    // ⚠️ P1-35（2026-10-02）：原来是**裸调** —— 一抛异常整个 launch 就静默结束，
+                    // 表单停在**空默认值**且没有任何提示（用户以为"点了打开没反应"）。
+                    val loadedDetail = securityId?.let { sid -> runCatching { repo.loadSecurityDetail(sid) } }
+                    val detail = loadedDetail?.getOrNull()
                     val tx = detail?.transactions?.firstOrNull { it.id == editTxId }
                     if (detail == null || tx == null) {
-                        base.copy(error = "找不到要编辑的交易")
+                        base.copy(error = describeLoadFailure(loadedDetail, "找不到要编辑的交易"))
                     } else {
                         base.copy(
                             editTxId = editTxId,
@@ -245,9 +248,11 @@ class TradeFormHolder(
 
                 securityId != null -> {
                     // 预填态：从标的历史交易页点「新增一笔」进来，现价带出来省一次输入
-                    val detail = repo.loadSecurityDetail(securityId)
+                    // ⚠️ P1-35：同编辑态 —— 裸调失败会让表单静默不初始化（无提示、无日志）
+                    val loadedDetail = runCatching { repo.loadSecurityDetail(securityId) }
+                    val detail = loadedDetail.getOrNull()
                     if (detail == null) {
-                        base.copy(error = "找不到标的")
+                        base.copy(error = describeLoadFailure(loadedDetail, "找不到标的"))
                     } else {
                         base.copy(
                             securityId = detail.security.id,
@@ -570,15 +575,17 @@ class TradeFormHolder(
                 else -> Market.A_SHARE
             }
             val currency = Currency.entries.firstOrNull { it.code == hit.currencyCode } ?: Currency.CNY
-            val security = security.findOrCreateSecurity(
+            // ⚠️ P1-35（2026-10-02）：原来是**裸调** —— 建标的一抛异常协程体就结束，
+            // 表现为「点了候选没反应」（选不中、无提示、无日志）。失败原因见 [createSecurityOrReport]。
+            val created = createSecurityOrReport(
                 symbol = hit.symbol,
                 name = hit.name,
                 market = market,
                 currency = currency,
                 // 场外基金缺省「不计入统计」（老周 2026-09-20）；已存在的标的按原开关原样返回
                 excludeFromStats = market == Market.FUND,
-            )
-            pick(security)
+            ) ?: return@launch
+            pick(created)
         }
     }
 
@@ -616,6 +623,51 @@ class TradeFormHolder(
         }
     }
 
+    /**
+     * **读标的详情失败时的人话原因**（P1-35，2026-10-02）。
+     *
+     * 把「没有这个标的 / 这笔交易」与「读库本身炸了」分开 —— 后者必须带上原因：
+     * 改前是裸调，抛异常 → 协程体直接结束 → 表单停在空默认值且**没有任何提示**（无提示、无日志）。
+     *
+     * @param result 那次 `runCatching { loadSecurityDetail(...) }`；null = 根本没发起请求（如 securityId 为 null）
+     * @param fallback 没有异常时用的兜底文案（即"确实找不到"）
+     */
+    private fun <T> describeLoadFailure(result: Result<T>?, fallback: String): String {
+        val e = result?.exceptionOrNull() ?: return fallback
+        com.stocknote.data.log.SnLog.e("TRADE_FORM", "读取标的详情失败", e)
+        return "读取标的详情失败：" + (e.message ?: e::class.simpleName ?: "未知错误")
+    }
+
+    /**
+     * **建标的（按 symbol 去重）**；失败时写运行日志 + 把原因落到 `error`，返回 null（P1-35，2026-10-02）。
+     *
+     * 调用方约定：`?: return@launch`。改前两处（[pickOnline] / [createAndPick]）都是裸调，
+     * 一抛异常协程体就结束 —— 用户点了候选 / 点了「新增」，界面**毫无反应**，也查不到任何日志。
+     */
+    private suspend fun createSecurityOrReport(
+        symbol: String,
+        name: String,
+        market: Market,
+        currency: Currency,
+        excludeFromStats: Boolean,
+    ): Security? = runCatching {
+        security.findOrCreateSecurity(
+            symbol = symbol,
+            name = name,
+            market = market,
+            currency = currency,
+            excludeFromStats = excludeFromStats,
+        )
+    }.onFailure { e ->
+        com.stocknote.data.log.SnLog.e("TRADE_FORM", "建立标的失败：$symbol", e)
+        _state.update {
+            it.copy(
+                error = "无法建立标的「$name（$symbol）」：" +
+                    (e.message ?: e::class.simpleName ?: "未知错误"),
+            )
+        }
+    }.getOrNull()
+
     /** 价格去掉多余小数（最多 3 位），避免 1277.9599999 这种 */
     private fun trimPrice(v: Double): String {
         // ⚠️ M3 修复（2026-09-28）：改用 Locale 无关的 Format.fixedPlain
@@ -630,14 +682,15 @@ class TradeFormHolder(
             return
         }
         scope.launch {
-            val security = security.findOrCreateSecurity(
+            // ⚠️ P1-35：同 pickOnline —— 裸调失败会让「手动新增标的」点了没反应
+            val created = createSecurityOrReport(
                 symbol = s.newSymbol,
                 name = s.newName,
                 market = s.newMarket,
                 currency = s.newCurrency,
                 excludeFromStats = s.excludeFromStats,
-            )
-            pick(security)
+            ) ?: return@launch
+            pick(created)
         }
     }
 
