@@ -64,6 +64,9 @@ actual fun rememberBrowserOpener(): (String) -> Unit =
  *  3. **URL 变了才 load**：详情页复用同一个 Composable，`update` 每次重组都会跑，
  *     无脑 load 会不停刷屏（Android 侧踩过同样的坑）。
  */
+// ⚠️ 必须 OptIn：`UIKitView` 本身没有实验性注解，但 **`UIKitInteropProperties` 的构造函数带
+//    `@ExperimentalComposeUiApi`**（已按 CMP **1.11.1** 的源码逐行确认）—— 漏了直接编译失败。
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 actual fun HtmlView(url: String, modifier: Modifier) {
     val openBrowser = rememberBrowserOpener()
@@ -74,9 +77,11 @@ actual fun HtmlView(url: String, modifier: Modifier) {
         WebViewNavigationDelegate(
             onFinished = { webView ->
                 webView.evaluateJavaScript(CleanPageJs) { _, error ->
+                    // ⚠️ 只取 `code`，不用 `localizedDescription`（同上：避免用到需要额外 import 的
+                    //    Foundation 扩展属性）。日志里有个错误码足够定位。
                     nativeLog(
                         "[SN_CLEAN] iOS 注入清理脚本：" +
-                            (error?.let { "失败 " + it.localizedDescription } ?: "已执行"),
+                            (if (error == null) "已执行" else "失败 code=" + error.code),
                     )
                 }
             },
@@ -157,6 +162,10 @@ private class WebViewNavigationDelegate(
         didFailProvisionalNavigation: WKNavigation?,
         withError: NSError,
     ) {
-        onFailed(withError.localizedDescription)
+        // ⚠️ 刻意只取 `code`（NSError 的**声明属性**，稳）。不用 `localizedDescription`：
+        //    Foundation 上有一批属性在 K/N 里是「需要显式 import 的顶层扩展」，
+        //    本项目已经在那上面白跑过 3 轮 CI（见 Platform.ios.kt 的 todayIso 注释）。
+        //    错误码足够定位（如 -1004 连不上、-1001 超时），用户也有「用系统浏览器打开」的出口。
+        onFailed("无法加载该网页（错误码 ${withError.code}）")
     }
 }

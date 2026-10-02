@@ -115,7 +115,14 @@ fun main() {
     }
 }
 
-private const val VERSION_LABEL = "1.1.8 · 桌面版"
+/**
+ * 「关于」页 / 导出日志里的版本号。
+ *
+ * ⚠️ **不要在这里手写版本号**（老周 2026-10-02）：这里原本写着常量 `"1.1.6 · 桌面版"`，
+ * 而当时工程已经是 1.1.8 —— 手写必然漏改。现在从构建脚本生成的 [DesktopBuildInfo] 取，
+ * 要发版只改 `desktopApp/build.gradle.kts` 顶部的 `desktopVersion` 一处。
+ */
+private val VERSION_LABEL: String = DesktopBuildInfo.VERSION + " · 桌面版"
 
 /**
  * 一级菜单 = 5 个页面（与 `Screen` 顺序一致）。

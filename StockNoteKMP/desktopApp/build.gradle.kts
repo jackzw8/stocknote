@@ -16,6 +16,53 @@ kotlin {
     jvmToolchain(17)
 }
 
+/**
+ * 桌面版版本号 —— **本模块的单一来源**。
+ *
+ * 规范 §3 的「三处同步」指 androidApp/build.gradle.kts、iosApp/iosApp/Info.plist、本文件；
+ * 本文件里**只留这一处字面量**：jpackage 的 `packageVersion` 与「关于」页显示的版本号都从它派生
+ *（见下面的 [generateBuildInfo]）。
+ *
+ * ⚠️ jpackage 只接受 `major.minor.patch` 纯数字，**不能带后缀**（`-dbg` / `· 桌面版` 之类）。
+ */
+val desktopVersion = "1.1.8"
+
+/**
+ * 把版本号生成成 Kotlin 常量（`:desktopApp` 的「关于」页与导出日志用）。
+ *
+ * ⚠️ 为什么不再手写（老周 2026-10-02 发现）：`Main.kt` 里原本是 `VERSION_LABEL = "1.1.6 · 桌面版"`，
+ * 而当时工程已经是 1.1.8 —— 手写的版本号**发版必然漏改**，且没有任何机制能发现。
+ * 现在「关于」页的值直接来自构建配置：要发版只改上面 [desktopVersion] 一处。
+ */
+val buildInfoDir: Provider<Directory> = layout.buildDirectory.dir("generated/buildInfo/kotlin")
+
+val generateBuildInfo by tasks.registering {
+    // 声明输入输出：版本没变就是 up-to-date（不重复写文件），变了才重跑
+    inputs.property("desktopVersion", desktopVersion)
+    outputs.dir(buildInfoDir)
+    doLast {
+        val packageDir = buildInfoDir.get().asFile.resolve("com/stocknote/desktop")
+        packageDir.mkdirs()
+        packageDir.resolve("DesktopBuildInfo.kt").writeText(
+            """
+            |// ⚠️ 本文件由 desktopApp/build.gradle.kts 的 generateBuildInfo 任务生成，**别手改**（改了会被覆盖）。
+            |package com.stocknote.desktop
+            |
+            |/** 桌面壳的构建信息。 */
+            |internal object DesktopBuildInfo {
+            |    /** 形如 "1.1.8" —— 与 androidApp / iosApp 的版本号同步维护（规范 §3）。 */
+            |    const val VERSION: String = "$desktopVersion"
+            |}
+            |
+            """.trimMargin(),
+            Charsets.UTF_8,
+        )
+    }
+}
+
+kotlin.sourceSets["main"].kotlin.srcDir(buildInfoDir)
+tasks.named("compileKotlin") { dependsOn(generateBuildInfo) }
+
 dependencies {
     implementation(project(":shared:feature"))
     // 桌面渲染引擎（Skiko）+ 窗口/AWT 集成，按当前操作系统解析
@@ -56,8 +103,8 @@ compose.desktop {
             )
 
             packageName = "StockNote"
-            // jpackage 只接受 major.minor.patch 的纯数字版本，不能带后缀
-            packageVersion = "1.1.8"
+            // ⚠️ 版本号来自文件顶部的 desktopVersion（**别在这里再写一遍字面量**）
+            packageVersion = desktopVersion
             // ⚠️ description / vendor 必须是**纯 ASCII**（老周 2026-09-30 踩坑）：
             // jpackage 按**平台默认编码**读取插件的参数文件，中文 Windows 是 GBK，
             // 而参数文件是 UTF-8 写出的 → 一遇中文就抛 `Input length = 1`（MalformedInput），

@@ -2,13 +2,11 @@
 
 package com.stocknote.data.security
 
-import kotlinx.cinterop.UInt8Var
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.convert
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
-import kotlinx.cinterop.reinterpret
 import kotlinx.cinterop.usePinned
 import kotlinx.cinterop.value
 import platform.CoreFoundation.CFDictionaryCreateMutable
@@ -207,7 +205,10 @@ class IosSecureKeyStore : SecureKeyStore {
     private fun randomPassphrase(): ByteArray {
         val bytes = ByteArray(PASSPHRASE_BYTES)
         val status = bytes.usePinned { pinned ->
-            SecRandomCopyBytes(kSecRandomDefault, PASSPHRASE_BYTES.convert(), pinned.addressOf(0).reinterpret<UInt8Var>())
+            // ⚠️ 第三个参数是 C 的 `void *bytes` → K/N 里就是 `COpaquePointer?`，把 `addressOf` 拿到的
+            //    指针**直接传进去**即可。**别写 `reinterpret<UInt8Var>()`** —— `kotlinx.cinterop` 里
+            //    根本没有 `UInt8Var` 这个名字（CI 第 1 轮就是挂在这一行：Unresolved reference）。
+            SecRandomCopyBytes(kSecRandomDefault, PASSPHRASE_BYTES.convert(), pinned.addressOf(0))
         }
         if (status != errSecSuccess) failWith(status)
         return bytes

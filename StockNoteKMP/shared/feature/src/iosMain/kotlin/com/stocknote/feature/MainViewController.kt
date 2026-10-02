@@ -146,16 +146,18 @@ private const val IOS_MIN_VERSION = "iOS 14.0+"
  * `App(container = …)` **没传 versionLabel**，页面走了「—」的兜底分支；
  * 同一处还暴露了「平台文案写死 Android」的问题（见 [IOS_MIN_VERSION]）。
  */
-private fun bundleVersionLabel(): String {
+private fun bundleVersionLabel(): String = runCatching {
     val info = NSBundle.mainBundle
     val name = info.objectForInfoDictionaryKey("CFBundleShortVersionString") as? String
     val build = info.objectForInfoDictionaryKey("CFBundleVersion") as? String
-    return when {
+    when {
         name.isNullOrBlank() -> ""
         build.isNullOrBlank() -> name
         else -> "$name ($build)"
     }
-}
+    // ⚠️ 兜底：版本号读不出来最多是「关于」页显示成 —，绝不能因此把启动搞崩
+    //   （Foundation 的桥接在本项目是有前科的，见 Platform.ios.kt 的 todayIso 注释）。
+}.getOrDefault("")
 
 private var cachedContainer: AppContainer? = null
 
