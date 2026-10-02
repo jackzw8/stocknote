@@ -159,6 +159,56 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
+      # ⚠️⚠️ 2026-10-02 新增：**预解析 SwiftPM 依赖（SQLCipher）**。
+      # 起因：第 3 轮 CI 终于走到 xcodebuild（前面的 K/N 编译与链接都过了），却倒在
+      # `Resolve Package Graph`：
+      #   Fetching from https://github.com/sqlcipher/SQLCipher.swift     ← 卡了 30 秒
+      #   Git command 'git -C ~/Library/Caches/org.swift.swiftpm/repositories/SQLCipher.swift-5392e827
+      #     config --get remote.origin.url' failed:
+      #     fatal: cannot change to '...': No such file or directory
+      # ⇒ SwiftPM 的 fetch **根本没落到默认缓存目录**（不是"版本找不到"，也不是 checksum 问题）。
+      # 这里三件事一起做：
+      #   ① 先探 runner 能不能**直接 clone** 这个公开仓库 —— 把"网络/凭据问题"与"SwiftPM 缓存问题"分开；
+      #   ② 把 SwiftPM 的**克隆目录改到工作区内**（`-clonedSourcePackagesDirPath`）：托管 runner 上
+      #      默认的 `~/Library/Caches/org.swift.swiftpm` 是已知容易出问题的位置，放工作区还便于缓存；
+      #   ③ 失败清掉半截缓存后**重试 3 次**（fetch 卡 30 秒也像瞬时网络问题）。
+      # ⚠️ archive 那一步必须传**同一个** `-clonedSourcePackagesDirPath`，否则它会再解析一遍。
+      - name: 预解析 SwiftPM 依赖（SQLCipher）
+        if: ${{ !inputs.build_simulator }}
+        working-directory: StockNoteKMP/iosApp
+        run: |
+          set -u
+          echo "===== ① runner 能否直接 clone 该公开仓库 ====="
+          git --version
+          rm -rf /tmp/sqlcipher-probe
+          if git clone --depth 1 https://github.com/sqlcipher/SQLCipher.swift /tmp/sqlcipher-probe; then
+            echo "OK：git clone 成功（说明网络没问题，问题在 SwiftPM 那侧）"
+            rm -rf /tmp/sqlcipher-probe
+          else
+            echo "!!! git clone 失败 —— 属于网络/凭据问题，不是 SwiftPM 的锅 !!!"
+          fi
+
+          echo "===== ② xcodebuild 解析依赖（克隆到工作区内，最多 3 次）====="
+          SPM_DIR="$GITHUB_WORKSPACE/.spm-packages"
+          for i in 1 2 3; do
+            echo "----- 第 $i 次 -----"
+            if xcodebuild -project StockNoteApp.xcodeproj -scheme StockNoteApp \
+                 -clonedSourcePackagesDirPath "$SPM_DIR" \
+                 -resolvePackageDependencies; then
+              echo "OK：SwiftPM 依赖解析成功"
+              exit 0
+            fi
+            echo "第 $i 次失败：先打印现场，再清掉半截缓存重试"
+            echo "HOME=$HOME"; echo "PATH=$PATH"; which -a git || true
+            ls -la "$SPM_DIR" 2>&1 | head -20 || true
+            ls -la ~/Library/Caches/org.swift.swiftpm/repositories 2>&1 | head -20 || true
+            rm -rf "$SPM_DIR"
+            rm -rf ~/Library/Caches/org.swift.swiftpm/repositories/SQLCipher.swift-* || true
+            sleep 10
+          done
+          echo "!!! SwiftPM 依赖解析失败 !!!"
+          exit 1
+
       # ---- 真机：未签名 archive ----
       - name: 构建（真机未签名 archive）
         if: ${{ !inputs.build_simulator }}
@@ -171,6 +221,7 @@ jobs:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/StockNoteApp.xcarchive" \
+            -clonedSourcePackagesDirPath "$GITHUB_WORKSPACE/.spm-packages" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \

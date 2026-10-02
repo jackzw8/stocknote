@@ -547,7 +547,11 @@ class TradeFormHolder(
         }
         scope.launch {
             _state.update { it.copy(searching = true, searchingOnline = true, recentMode = false) }
-            val local = security.searchSecurities(kw)
+            // ⚠️ P1-21 同型修复（2026-10-02）：这一行原来是**裸调**，而两个标志位在上一行刚置 true ——
+            // 一旦仓储抛异常，协程体直接结束 → `searching` / `searchingOnline` 永久为 true
+            //（搜索框一直转圈、界面没有任何文案，也没法再搜）。
+            // 同文件 :543（recentSecurities）与下面 :553（searchOnline）都用了 runCatching，唯独这里漏了。
+            val local = runCatching { security.searchSecurities(kw) }.getOrDefault(emptyList())
             _state.update { it.copy(searching = false, candidates = local) }
             // 联网搜索后置：本地结果先出（满足 <400ms 可感目标），网络慢也不拖界面
             val online = runCatching { security.searchOnline(kw) }.getOrDefault(emptyList())

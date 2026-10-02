@@ -60,6 +60,13 @@ kotlin {
             }
         }
 
+        // ⚠️ P1-21（2026-10-02）：feature 层的**第一批 Holder 行为测试**。
+        // 用真内存库 + 真 `AppContainer`（jvm 侧 `createEncryptedDriver` 在未设系统属性时是内存库，
+        // schema 由测试自己建），把「加载失败也必须收敛标志位」这类不变量钉住。
+        jvmTest.dependencies {
+            implementation(kotlin("test"))
+        }
+
         commonMain.dependencies {
             // api 而非 implementation：AppStateHolder 的构造参数是 AppContainer、
             // 状态里带 PortfolioSnapshot 等 core 类型，这些都在公开签名上，

@@ -366,11 +366,9 @@ private fun HeroCard(
                 // 可用现金 = 持仓页同口径（不含现金等价物；等价物单独列示）——老周 2026-09-16
                 HeroMetric("可用现金", amt(snapshot?.availableCash ?: 0.0))
                 HeroMetric("总盈亏", signed(snapshot?.totalPnl ?: 0.0))
-                // 持仓浮动盈亏（老周 2026-09-20）：与持仓页「持仓浮动盈亏」同口径
-                // （snapshot.unrealizedPnlTotal = Σ 各持仓浮动盈亏折算本位币），
-                // 插在「当日盈亏」上方 —— 总盈亏（累计）与当日盈亏（单日）之间给一个"当前持仓浮盈"的量级参考。
-                // 蓝色渐变底上沿用白色文字，不套红绿（与同卡片其它指标一致）。
-                HeroMetric("持仓浮动盈亏", signed(snapshot?.unrealizedPnlTotal ?: 0.0))
+                // ⚠️ 「持仓浮动盈亏」这一行已删除（老周 2026-10-02）：同一个数字（snapshot.unrealizedPnlTotal）
+                // 现在在下面「📈 持仓市值」指标卡的正下方有独立一张「💹 持仓浮动盈亏」卡（还带持仓收益率），
+                // 放在 Hero 卡里等于同一数字显示两遍。
                 HeroMetric("当日盈亏", signed(snapshot?.dayPnl ?: 0.0))
             }
         }

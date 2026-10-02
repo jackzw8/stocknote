@@ -387,73 +387,96 @@ class AppStateHolder(
     fun loadEquity(force: Boolean = false) {
         scope.launch {
             _state.update { it.copy(equityLoading = true, equityError = null) }
-            val result = runCatching {
-                container.portfolio.equityCurveCached(refresh = force)
-            }.getOrNull()
+            // ⚠️ P1-21 修复（2026-10-02）：**整段**都必须在兜底之内。
+            // 原来只把 `equityCurveCached` 包了 runCatching，而下面「今年收益」段里的
+            // `container.cash.cashFlowsSince(yearStartPoint.date)` 是**裸调** —— 它一抛异常，
+            // 协程体直接结束，后面所有 `_state.update` 都不执行 → `equityLoading` 永久停在 true、
+            // `equityError` 仍是 null。后果：① 统计页「最大回撤」/「盈亏日历」一直转圈且**没有任何文案**，
+            // 导出的运行日志里也查不到；② 启动图放行条件依赖
+            // `!equityLoading && (maxDrawdown != null || equityError != null)`（App.kt）→ 一直卡到 5 秒上限。
+            // 同文件的 load() / refreshAll() / checkDividends() 都做了兜底，这里属**遗漏而非设计**。
+            try {
+                val result = runCatching {
+                    container.portfolio.equityCurveCached(refresh = force)
+                }.getOrNull()
 
-            val data = result?.data
-            if (data == null || data.points.isEmpty()) {
+                val data = result?.data
+                if (data == null || data.points.isEmpty()) {
+                    _state.update {
+                        it.copy(
+                            equityLoading = false,
+                            equityError = result?.reason ?: "资产曲线暂时算不出来",
+                        )
+                    }
+                    return@launch
+                }
+                val dd = data.maxDrawdown
+                // ---- 今年收益（老周 2026-09-28）----
+                // 挂在曲线之后算：**年初资产取自曲线的 1 月 1 日点**，所以曲线没就绪时只能显示"—"。
+                val today = com.stocknote.data.platform.todayIso()
+                val yearStart = today.take(4) + "-01-01"
+                val snapForYear = _state.value.snapshot
+                // 曲线里 <= 年初 的最后一个点（曲线窗口 365 天，正常情况下已含 1/1）
+                val yearStartPoint = data.points.lastOrNull { it.date <= yearStart }
+                    ?: data.points.firstOrNull()   // 降级：账本当年才建（曲线起点晚于 1/1）→ 用最早点并标注
+                var yGain: Double? = null
+                var yRate: Double? = null
+                if (snapForYear != null && yearStartPoint != null) {
+                    val currentAsset = snapForYear.totalAsset
+                    // ⚠️ 2026-09-30 修复：这里必须用 **yearStartPoint.date**（真正当成期初的那一点），
+                    // 不能用自然年 `yearStart`(= YYYY-01-01)：
+                    // 账本当年才建时 yearStartPoint 会降级成**曲线首点**（如 2026-02-02），
+                    // 而该点的资产快照**已经含了当天及之前的所有入金** —— 再用 1/1 去取流水，
+                    // 会把那笔入金当成"年内净投入"再算一遍 → 今年收益凭空少一整笔。
+                    // 真机实测（演示数据）：2-02 入金 50 万被重复计入，今年收益 +3.0 万错成 −46.98 万（−93.9%）。
+                    // 与 CashRepository.cashFlowsSince 的 KDoc「必须严格大于起算日」是同一条规矩。
+                    val yearFlows = container.cash.cashFlowsSince(yearStartPoint.date)
+                    // 出入金带符号（存入为负）→ 取反得到「年内净入金」
+                    val netInflow = -yearFlows.sumOf { it.amount }
+                    yGain = currentAsset - yearStartPoint.totalAsset - netInflow
+                    // 账户年内 XIRR：期初（负）→ 年内各笔出入金 → 期末（正，当前总资产）
+                    // 收益率：简单口径（老周 2026-09-28）= 收益 ÷ 年初资产；年初为 0 → ÷ 年内净投入
+                    yRate = run {
+                        val denom = if (yearStartPoint.totalAsset > 0) yearStartPoint.totalAsset else netInflow
+                        if (denom > 0) yGain / denom else null
+                    }
+                }
                 _state.update {
                     it.copy(
                         equityLoading = false,
-                        equityError = result?.reason ?: "资产曲线暂时算不出来",
+                        equityPoints = data.points,
+                        equityDailyCashFlows = data.dailyCashFlows,
+                        // 名称与曲线同源带过来，供盈亏日历明细按标的显示（老周 2026-10-01）
+                        equitySecurityNames = data.securityNames,
+                        yearGain = yGain,
+                        yearRate = yRate,
+                        yearStartDate = yearStartPoint?.date ?: "",
+                        yearIsFullYear = yearStartPoint?.let { it.date <= yearStart } ?: true,
+                        maxDrawdown = dd.maxDrawdown,
+                        // 老周 2026-09-23 真机反馈：原「峰值 2026-04-16 → 谷值 2026-05-01」在半宽卡里
+                        // 被省略号吃掉。改成只留区间「04-16↘05-01」——半宽卡一定放得下，
+                        // 且不再重复百分比（上面的大字已经写着回撤幅度了）。
+                        drawdownRange = if (dd.maxDrawdown > 0 && dd.peakDate.isNotBlank()) {
+                            "${dd.peakDate.drop(5)}↘${dd.troughDate.drop(5)}"
+                        } else {
+                            "区间内无回撤"
+                        },
+                        equityError = null,
                     )
                 }
-                return@launch
-            }
-            val dd = data.maxDrawdown
-            // ---- 今年收益（老周 2026-09-28）----
-            // 挂在曲线之后算：**年初资产取自曲线的 1 月 1 日点**，所以曲线没就绪时只能显示"—"。
-            val today = com.stocknote.data.platform.todayIso()
-            val yearStart = today.take(4) + "-01-01"
-            val snapForYear = _state.value.snapshot
-            // 曲线里 <= 年初 的最后一个点（曲线窗口 365 天，正常情况下已含 1/1）
-            val yearStartPoint = data.points.lastOrNull { it.date <= yearStart }
-                ?: data.points.firstOrNull()   // 降级：账本当年才建（曲线起点晚于 1/1）→ 用最早点并标注
-            var yGain: Double? = null
-            var yRate: Double? = null
-            if (snapForYear != null && yearStartPoint != null) {
-                val currentAsset = snapForYear.totalAsset
-                // ⚠️ 2026-09-30 修复：这里必须用 **yearStartPoint.date**（真正当成期初的那一点），
-                // 不能用自然年 `yearStart`(= YYYY-01-01)：
-                // 账本当年才建时 yearStartPoint 会降级成**曲线首点**（如 2026-02-02），
-                // 而该点的资产快照**已经含了当天及之前的所有入金** —— 再用 1/1 去取流水，
-                // 会把那笔入金当成"年内净投入"再算一遍 → 今年收益凭空少一整笔。
-                // 真机实测（演示数据）：2-02 入金 50 万被重复计入，今年收益 +3.0 万错成 −46.98 万（−93.9%）。
-                // 与 CashRepository.cashFlowsSince 的 KDoc「必须严格大于起算日」是同一条规矩。
-                val yearFlows = container.cash.cashFlowsSince(yearStartPoint.date)
-                // 出入金带符号（存入为负）→ 取反得到「年内净入金」
-                val netInflow = -yearFlows.sumOf { it.amount }
-                yGain = currentAsset - yearStartPoint.totalAsset - netInflow
-                // 账户年内 XIRR：期初（负）→ 年内各笔出入金 → 期末（正，当前总资产）
-                // 收益率：简单口径（老周 2026-09-28）= 收益 ÷ 年初资产；年初为 0 → ÷ 年内净投入
-                yRate = run {
-                    val denom = if (yearStartPoint.totalAsset > 0) yearStartPoint.totalAsset else netInflow
-                    if (denom > 0) yGain / denom else null
+            } catch (t: Throwable) {
+                // 兜底（P1-21）：无论哪一步炸（曲线计算 / 取年内流水 / 状态写入），
+                // 标志位都必须**收敛**，原因同时给用户（equityError）与运行日志（SnLog）。
+                // ⚠️ 刻意**不清空** equityPoints / maxDrawdown：上一次算出的曲线仍然有效，
+                //    清掉反而把界面从"有数据"打回"待数据"。
+                com.stocknote.data.log.SnLog.e("EQUITY", "资产曲线 / 今年收益刷新失败", t)
+                _state.update {
+                    it.copy(
+                        equityLoading = false,
+                        equityError = "资产曲线刷新失败：" +
+                            (t.message ?: t::class.simpleName ?: "未知错误"),
+                    )
                 }
-            }
-            _state.update {
-                it.copy(
-                    equityLoading = false,
-                    equityPoints = data.points,
-                    equityDailyCashFlows = data.dailyCashFlows,
-                    // 名称与曲线同源带过来，供盈亏日历明细按标的显示（老周 2026-10-01）
-                    equitySecurityNames = data.securityNames,
-                    yearGain = yGain,
-                    yearRate = yRate,
-                    yearStartDate = yearStartPoint?.date ?: "",
-                    yearIsFullYear = yearStartPoint?.let { it.date <= yearStart } ?: true,
-                    maxDrawdown = dd.maxDrawdown,
-                    // 老周 2026-09-23 真机反馈：原「峰值 2026-04-16 → 谷值 2026-05-01」在半宽卡里
-                    // 被省略号吃掉。改成只留区间「04-16↘05-01」——半宽卡一定放得下，
-                    // 且不再重复百分比（上面的大字已经写着回撤幅度了）。
-                    drawdownRange = if (dd.maxDrawdown > 0 && dd.peakDate.isNotBlank()) {
-                        "${dd.peakDate.drop(5)}↘${dd.troughDate.drop(5)}"
-                    } else {
-                        "区间内无回撤"
-                    },
-                    equityError = null,
-                )
             }
         }
     }
