@@ -145,6 +145,11 @@ actual fun HtmlView(url: String, modifier: Modifier) {
  * `@Suppress("CONFLICTING_OVERLOADS")`：`WKNavigationDelegateProtocol` 里有多个
  * `webView(_:didXxxNavigation:)`，在 Kotlin 看来签名完全相同 —— 用 `@ObjCSignatureOverride`
  * 告诉编译器"它们其实是不同的 ObjC 选择器"（这是 K/N 的固定写法）。
+ *
+ * ⚠️ 编译时会有一条警告：`Suppression of error 'CONFLICTING_OVERLOADS' ... the compiler behavior
+ * is UNSPECIFIED and WILL NOT BE PRESERVED`。**这是预期的**：原因就是上面那个固有的签名冲突，
+ * 业界通用的成熟库（如 compose-webview-multiplatform）用的也是这套写法。真出问题的触发条件是
+ * **升 Kotlin 大版本**时 —— 到时候优先回来重测这里，别去猜别处。
  */
 @Suppress("CONFLICTING_OVERLOADS")
 private class WebViewNavigationDelegate(

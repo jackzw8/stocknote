@@ -40,7 +40,17 @@ jobs:
     #        Undefined symbols: _OBJC_CLASS_$_UIViewLayoutRegion, referenced from SharedUI(CMPLayoutRegion.o)
     #        ld: symbol(s) not found for architecture arm64 / ** ARCHIVE FAILED **
     #   ③ macos-26（2026-02 起 GA）：自带 **Xcode 26 / iOS 26 SDK**，`UIViewLayoutRegion` 才存在。
-    runs-on: macos-26
+    #   ④ ⭐ 2026-10-02：改成 **`macos-26-intel`** —— 同为 Xcode 26 / iOS 26 SDK，但内存翻倍。
+    #      为什么必须换：`macos-26` 是 **arm64** 标准档，只有 **3 vCPU / 7 GB**；
+    #      而 14 GB 那档是 Intel 标准档（4 vCPU / 14 GB）。两者都是**免费标准 runner**
+    #      （macOS 标准档对公开/私有仓库规格一致，公开仓库不限量）。
+    #      上一轮 `:shared:feature:linkReleaseFrameworkIosArm64` 在 6144m 堆上 OOM，
+    #      栈顶是 `konan.optimizations.DevirtualizationAnalysis ... mergeEdges`：
+    #      这类 OOM 是**堆上限**被顶到（不是被系统杀），所以光加内存不够、光提上限也不行 —— 两件事一起改：
+    #        · `kotlin.daemon.jvmargs` 6144m → 10240m（见 StockNoteKMP/gradle.properties）
+    #        · runner 换成 14 GB 的 `macos-26-intel`
+    #      产出物仍是 `iosArm64` 的 framework（K/N 在 Intel 宿主上交叉编译 Apple 设备产物是常规路径）。
+    runs-on: macos-26-intel
     # ⚠️ 2026-10-01：曾一度提到 180，现改回 90。
     #   原因：真实故障不是"跑太久超时"，而是 **xcodebuild 的 script phase 挂死**
     #   （Xcode 里跑 ./gradlew 时 Gradle daemon 起不来，见 iosApp/project.yml 的 --no-daemon 修复）。
@@ -77,6 +87,19 @@ jobs:
           ls -d /Applications/Xcode*.app 2>/dev/null || true
           xcodebuild -version
           xcode-select -p
+
+      # ⭐ 2026-10-02 加：**打印 runner 的真实硬件规格**。
+      # 起因：`macos-26`（arm64）标准档只有 7 GB 内存，而 14 GB 那档是 `macos-26-intel` ——
+      # 这个差异直接决定 Kotlin/Native 能不能链上 release framework，但**日志默认一个数字都不写**，
+      # 害得我们按「runner 有 14G」的错误印象把堆上限一路往上调（见 gradle.properties 的注释）。
+      # 以后调 jvmargs / 换 runner 之前，先看这几行。
+      - name: 打印 runner 硬件信息
+        run: |
+          uname -srm
+          sysctl -n hw.ncpu
+          sysctl -n hw.memsize | awk '{printf "RAM: %.1f GB\n", $1/1024/1024/1024}'
+          df -h / | tail -1
+          echo "ImageOS=$ImageOS ImageVersion=$ImageVersion"
 
       - name: 安装 XcodeGen
         run: brew install xcodegen
