@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.UIKitInteropInteractionMode
 import androidx.compose.ui.viewinterop.UIKitInteropProperties
 import androidx.compose.ui.viewinterop.UIKitView
+import com.stocknote.data.log.SnLog
 import com.stocknote.data.platform.nativeLog
 import kotlinx.cinterop.ObjCSignatureOverride
 import platform.Foundation.NSError
@@ -28,6 +29,8 @@ import platform.Foundation.NSURL
 import platform.Foundation.NSURLRequest
 import platform.UIKit.UIApplication
 import platform.WebKit.WKNavigation
+import platform.WebKit.WKNavigationAction
+import platform.WebKit.WKNavigationActionPolicy
 import platform.WebKit.WKNavigationDelegateProtocol
 import platform.WebKit.WKWebView
 import platform.darwin.NSObject
@@ -86,6 +89,8 @@ actual fun HtmlView(url: String, modifier: Modifier) {
                 }
             },
             onFailed = { reason -> failure.value = reason },
+            // P1-20：白名单外的链接交给系统浏览器（iOS 侧就是 UIApplication.openURL）
+            onExternalNavigation = { target -> openBrowser(target) },
         )
     }
 
@@ -94,12 +99,18 @@ actual fun HtmlView(url: String, modifier: Modifier) {
             factory = {
                 WKWebView().apply {
                     navigationDelegate = delegate
+                    // ⚠️ P1-20：iOS 的 `decidePolicyForNavigationAction` **连初始加载一起问**
+                    //（Android 的 `shouldOverrideUrlLoading` 只问页内导航）→ 必须先把"App 自己给的
+                    // 正文 URL"登记好，否则只要正文域名不在白名单（如资讯来自 `new.qq.com`），
+                    // 详情页一打开就会被判成"站外"、直接甩进浏览器。
+                    delegate.allowDocumentLoad(url)
                     loadRequest(NSURLRequest(NSURL(string = url)))
                 }
             },
             modifier = Modifier.fillMaxSize(),
             update = { webView ->
                 if (webView.URL?.absoluteString != url) {
+                    delegate.allowDocumentLoad(url)
                     webView.loadRequest(NSURLRequest(NSURL(string = url)))
                 }
             },
@@ -155,7 +166,25 @@ actual fun HtmlView(url: String, modifier: Modifier) {
 private class WebViewNavigationDelegate(
     private val onFinished: (WKWebView) -> Unit,
     private val onFailed: (String) -> Unit,
+    /** P1-20：白名单外的 `http(s)` 链接 → 交给系统浏览器。 */
+    private val onExternalNavigation: (String) -> Unit,
 ) : NSObject(), WKNavigationDelegateProtocol {
+
+    /**
+     * App 自己给的那个正文 URL（P1-20）。
+     *
+     * ⚠️ 必须单独放行：iOS 的 `decidePolicyForNavigationAction` **连初始加载一起问**，
+     * 只按白名单判的话，正文域名一旦不在白名单就会被判成"站外"。
+     *
+     * 写入发生在 `loadRequest` 之前、读取在导航回调里，**都在主线程**；
+     * delegate 本身被 `remember` 持有，不用额外同步。
+     */
+    private var documentUrl: String? = null
+
+    /** 登记「本次要加载的主文档」，供导航策略无条件放行（见 [documentUrl] 的说明）。 */
+    fun allowDocumentLoad(url: String) {
+        documentUrl = url.trim()
+    }
 
     @ObjCSignatureOverride
     override fun webView(webView: WKWebView, didFinishNavigation: WKNavigation?) {
@@ -172,5 +201,57 @@ private class WebViewNavigationDelegate(
         //    本项目已经在那上面白跑过 3 轮 CI（见 Platform.ios.kt 的 todayIso 注释）。
         //    错误码足够定位（如 -1004 连不上、-1001 超时），用户也有「用系统浏览器打开」的出口。
         onFailed("无法加载该网页（错误码 ${withError.code}）")
+    }
+
+    /**
+     * P1-20：**主文档加载中途失败**。此前只覆盖了「开始前失败」
+     *（[didFailProvisionalNavigation]）—— 中途断网时页面就干在那儿，既没提示也没有出口。
+     *
+     * ⚠️ 它与上面那个方法在 Kotlin 里**签名完全相同**（`(WKWebView, WKNavigation?, NSError)`），
+     * 必须用 `@ObjCSignatureOverride` 表明"这是两个不同的 ObjC 选择器"。
+     */
+    @ObjCSignatureOverride
+    override fun webView(
+        webView: WKWebView,
+        didFailNavigation: WKNavigation?,
+        withError: NSError,
+    ) {
+        onFailed("网页加载中断（错误码 ${withError.code}）")
+    }
+
+    /**
+     * P1-20：**导航白名单**（规则与 Android 共用 commonMain 的 `InAppNavigationHosts`）。
+     *
+     * - 主文档 URL、白名单内的 https → 放行；
+     * - 其它 `http(s)` → 取消 + 交给系统浏览器；
+     * - 非 `http(s)`（`intent://` / `market://` …）→ 取消，**不转交**（这正是攻击面本身）。
+     */
+    override fun webView(
+        webView: WKWebView,
+        decidePolicyForNavigationAction: WKNavigationAction,
+        decisionHandler: (WKNavigationActionPolicy) -> Unit,
+    ) {
+        val target = decidePolicyForNavigationAction.request.URL?.absoluteString
+        when {
+            target == null ->
+                decisionHandler(WKNavigationActionPolicy.WKNavigationActionPolicyCancel)
+
+            target.trim() == documentUrl ->
+                decisionHandler(WKNavigationActionPolicy.WKNavigationActionPolicyAllow)
+
+            isInAppNavigationAllowed(target) ->
+                decisionHandler(WKNavigationActionPolicy.WKNavigationActionPolicyAllow)
+
+            isHttpUrl(target) -> {
+                decisionHandler(WKNavigationActionPolicy.WKNavigationActionPolicyCancel)
+                SnLog.i(NAV_LOG_TAG, "iOS 站外链接交给系统浏览器：$target")
+                onExternalNavigation(target)
+            }
+
+            else -> {
+                decisionHandler(WKNavigationActionPolicy.WKNavigationActionPolicyCancel)
+                SnLog.i(NAV_LOG_TAG, "iOS 已拦下非 http(s) 导航：$target")
+            }
+        }
     }
 }

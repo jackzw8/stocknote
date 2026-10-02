@@ -26,6 +26,82 @@ expect fun HtmlView(url: String, modifier: Modifier = Modifier)
 expect fun rememberBrowserOpener(): (String) -> Unit
 
 /**
+ * 内嵌网页的**导航白名单**（P1-20，2026-10-02，来自《代码审核报告》H2）。
+ *
+ * ## 为什么必须自己挡一道
+ * 资讯正文是**内嵌的第三方网页**，而内嵌页**没有地址栏**：被跳到钓鱼页或恶意链接时，
+ * 用户根本无从分辨（看上去还在 App 里）。这是 App 内部画面，缺的正是最后一道防线。
+ *
+ * ## 规则（三端共用**同一份**，别各写一套）
+ *  1. **只放行 `https` 且 host 在白名单内**的导航 → 留在内嵌页里（原来的"站内跳转不跳出应用"）;
+ *  2. 白名单**之外**的 `http(s)` → 交给系统浏览器（`rememberBrowserOpener`，那里有地址栏可判断）;
+ *  3. **非 `http(s)` 的 scheme（`intent://` / `market://` / `weixin://` / `tel:` …）一律不放行、
+ *     也不转交** —— 这类 URL 能被用来拉起任意组件（`intent://` 尤其危险），
+ *     转交出去等于把攻击面原样递过去;
+ *  4. `about:` / `data:` / `blob:` / `javascript:` 属**页面内部的本地 scheme**，
+ *     拉不起任何外部组件，放行（SPA 会用 `blob:` 渲染内容）。
+ *
+ * ⚠️ **只约束"页面内发起的导航"**，不约束 App 自己给的那个正文 URL
+ *（否则详情页一打开就被甩进浏览器 —— iOS 的 `decidePolicyForNavigationAction`
+ * 连初始加载一起问，所以那边额外记了一份"主文档 URL"，见 `HtmlView.ios.kt`）。
+ *
+ * ⚠️ host 匹配用**后缀 + 点号**：`gu.qq.com` 命中 `gu.qq.com` 与 `a.gu.qq.com`，
+ * 但**不**命中 `gu.qq.com.evil.com` —— 少了这个点号，白名单等于没写。
+ */
+internal val InAppNavigationHosts = listOf(
+    "gu.qq.com", // 腾讯资讯正文（资讯详情走的就是这个域）
+    "eastmoney.com", // 东方财富（资讯、公告）
+    "cninfo.com.cn", // 巨潮资讯（公告原文）
+    "gtimg.cn", // 腾讯的行情静态资源/图片域
+)
+
+/** 页面内部的本地 scheme：拉不起外部组件，一律放行。 */
+private val LocalOnlySchemes = listOf("about:", "data:", "blob:", "javascript:")
+
+/**
+ * 导航拦截的日志标签（P1-20）。
+ *
+ * 放 commonMain 一份、三端共用：用户报"点链接没反应 / 莫名跳走了"时，
+ * 「设置 → 数据管理 → 导出运行日志」里按 `NAV` 搜就能看到拦了什么、外放了什么。
+ */
+internal const val NAV_LOG_TAG = "NAV"
+
+/**
+ * 该**导航**是否允许留在内嵌页里（规则见 [InAppNavigationHosts]）。
+ *
+ * 只对 `https` 放行：正文与其站内链接现在都是 https，http 老链交给浏览器更安全。
+ */
+internal fun isInAppNavigationAllowed(url: String): Boolean {
+    val trimmed = url.trim()
+    if (LocalOnlySchemes.any { trimmed.startsWith(it, ignoreCase = true) }) return true
+    if (!trimmed.startsWith("https://", ignoreCase = true)) return false
+    val host = urlHost(trimmed) ?: return false
+    return InAppNavigationHosts.any { host == it || host.endsWith(".$it") }
+}
+
+/** 是否是可交给系统处理（浏览器/选择器）的 `http(s)` 链接；**其它 scheme 一律不转交**。 */
+internal fun isHttpUrl(url: String): Boolean {
+    val trimmed = url.trim()
+    return trimmed.startsWith("http://", ignoreCase = true) ||
+        trimmed.startsWith("https://", ignoreCase = true)
+}
+
+/**
+ * 从 URL 里取 host。
+ *
+ * ⚠️ 刻意**手写字符串处理**而不是 `java.net.URI`：commonMain 禁止 JVM 专有 API，
+ * 有 `CommonMainPlatformLeakTest` 把关。
+ */
+internal fun urlHost(url: String): String? {
+    val afterScheme = url.substringAfter("://", "")
+    if (afterScheme.isEmpty()) return null
+    val authority = afterScheme.substringBefore('/').substringBefore('?').substringBefore('#')
+    val hostPort = authority.substringAfterLast('@') // 去掉 user:pass@
+    val host = hostPort.substringBefore(':') // 去掉 :port
+    return host.trim().trimEnd('.').lowercase().ifEmpty { null }
+}
+
+/**
  * 隐藏腾讯资讯正文页里**推广 / 无关模块**的注入脚本（老周 2026-09-24 提，2026-09-30 提到 commonMain 供桌面共用）。
  *
  * 覆盖的模块（都是"红框部分"）：

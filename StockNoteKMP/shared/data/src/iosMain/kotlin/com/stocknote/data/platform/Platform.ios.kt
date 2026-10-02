@@ -240,7 +240,8 @@ actual fun formatLocalDateTime(epochMs: Long): String = memScoped {
 actual fun platformInfo(): String = "iOS"
 
 /**
- * iOS 日志：**双写** —— ① `NSLog` 进系统日志；② 追加到沙盒 `Documents/stocknote.log`。
+ * iOS 日志：**双写** —— ① `NSLog` 进系统日志；② 追加到沙盒 `Library/Caches/stocknote.log`
+ *（⚠️ P1-22，2026-10-02：原来在 `Documents/`，会进整机备份，已挪走并加轮转）。
  *
  * ## ⚠️⚠️ 为什么不能写 `NSLog("%@", message)`（2026-10-01 真机实测，血的教训）
  * 这么写会**当场崩溃**，而且是崩在**自己的日志调用**上 —— 主线程堆栈：
@@ -260,9 +261,25 @@ actual fun platformInfo(): String = "iOS"
  * ## 为什么要落盘
  * 爱思助手的「实时日志」**抓不到第三方 App 的输出**（2026-10-01 实测：抓回的 700 行里
  * 全是 `SpringBoard`/`cameracaptured` 这类系统进程，**一行 StockNote 都没有**）。
- * 所以必须同时写文件，再通过「爱思 → 应用 → 文件」或 iPad 的「文件」App 取出来。
  * 路径用 `getenv("HOME")` 拼（`platform.posix`，零导出名风险），
- * 文件系统 API 也用 POSIX（`fopen`/`fputs`），**不碰 Foundation 的那堆导出名**。
+ * 文件系统 API 也用 POSIX（`fopen`/`fputs`/`rename`），**不碰 Foundation 的那堆导出名**。
+ *
+ * ⚠️ 真机上**取日志的可用路径只有 App 内「设置 → 数据管理 → 导出运行日志」**
+ *（那条路走内存里的 [SnLog]，**不读这个文件**）。「文件」App / 爱思 那条路实测取不出来
+ *（自签会丢掉 Info.plist 的 `UIFileSharingEnabled`，见 MainViewController.kt 的注释）；
+ * 所以这个文件基本上是**给崩溃排查留的兜底**，加上轮转与不进备份即可。
+ *
+ * ## P1-22（2026-10-02）改了什么
+ *  1. **位置**：`Documents/` → **`Library/Caches/`**。`Documents` 默认进 iCloud/iTunes
+ *     **整机备份**（每次备份都要传这个可涨到几十 MB 的文件），且 `UIFileSharingEnabled` 一旦生效，
+ *     用户「文件」App 里就会多一个来历不明的文件；`Caches` **不参与备份**，被系统回收也无所谓。
+ *  2. **轮转**：超过 [LOG_MAX_BYTES] 就整轮改名成 `.1`（见 [rotateLogIfTooLarge]），占用封顶约 2 MB。
+ *  3. **迁移**：老版本留在 `Documents/` 的那个文件会被挪进 `Caches`（见 [migrateLegacyLogFile]），
+ *     否则"文件不再位于 Documents"这条验收对老装机不成立、备份里也仍然带着它。
+ *
+ * ⚠️ 报告里还提过「按级别过滤（默认保留 i/w/e）」—— **本次没做**：级别只存在于
+ * [SnLog] 传进来的那段文本里，要过滤就得改 `SnLog` 的公共接口（commonMain），
+ * 属于另一件事；建议并进 P2-6（把所有 `println` / `nativeLog` 收拢进 `SnLog`）时一起做。
  */
 actual fun nativeLog(message: String) {
     // ① 系统日志：单参数调用（不要用 "%@" 加参数的 vararg 形式，见上方注释）
@@ -271,7 +288,11 @@ actual fun nativeLog(message: String) {
     // ② 落盘：失败也不能让日志本身把 App 弄崩，故整体 runCatching
     runCatching {
         val home = platform.posix.getenv("HOME")?.toKString() ?: return
-        val path = "$home/Documents/stocknote.log"
+        migrateLegacyLogFile(home)
+
+        val path = "$home/$LOG_FILE_RELATIVE_PATH"
+        rotateLogIfTooLarge(path)
+
         val file = platform.posix.fopen(path, "a") ?: return
         try {
             platform.posix.fputs(message.replace("\n", " "), file)
@@ -281,4 +302,64 @@ actual fun nativeLog(message: String) {
             platform.posix.fclose(file)
         }
     }
+}
+
+/** 日志文件相对沙盒的位置（P1-22：`Library/Caches/` 不参与备份）。 */
+private const val LOG_FILE_RELATIVE_PATH = "Library/Caches/stocknote.log"
+
+/** 单个日志文件的上限（P1-22）。 */
+private const val LOG_MAX_BYTES = 1L * 1024 * 1024
+
+/**
+ * `SEEK_END` 的字面值（POSIX 固定：`SEEK_SET`=0 / `SEEK_CUR`=1 / `SEEK_END`=2）。
+ *
+ * ⚠️ 为什么不用 `platform.posix.SEEK_END`：本文件在 Windows 上编不了，**每多一个名字就多一轮 CI**；
+ * cinterop 对宏常量的导出并不总是齐，而这个值是 POSIX 写死的。同文件其它 POSIX 调用
+ *（`fopen`/`fputs`/`fflush`/`fgetc`/`rename`）都是**已在 CI 上验证过**的。
+ */
+private const val POSIX_SEEK_END = 2
+
+/**
+ * 日志轮转（P1-22）：超过上限就把当前文件改名成 `<文件>.1`，下次写入从空文件开始。
+ *
+ * ## 为什么是「整轮改名」而不是报告里写的「保留尾部 256 KB」
+ *  1. 效果更好：`.1` 是**上一整轮**的完整日志（排查时往往正需要"上次出事的上下文"），
+ *     而不是从中间截断的半截；
+ *  2. 只用 `fopen`/`fseek`/`ftell`/`rename` —— 截断尾部还要 `fread`/`fwrite` + pinned 内存，
+ *     在这个只能靠 CI 验证的文件里，每多一个 API 就多一份风险；
+ *  3. 占用依然有界：当前文件 ≤ 1 MB、`.1` ≤ 1 MB（`rename` 覆盖上一次的 `.1`）→ 封顶约 2 MB。
+ *
+ * ⚠️ 取大小用 `fseek(END)`+`ftell` 而不是 `stat`：`stat` 在 K/N 要用 `memScoped` 分配结构体，
+ *    而这三个调用都是 stdio 的常规成员（`fopen`/`fputs` 已在本文件验证过）。
+ * 失败一律静默返回 —— 轮转失败最多是文件大一点，绝不能让日志把 App 弄崩。
+ */
+private fun rotateLogIfTooLarge(path: String) {
+    val size = platform.posix.fopen(path, "rb")?.let { file ->
+        try {
+            if (platform.posix.fseek(file, 0, POSIX_SEEK_END) != 0) return@let null
+            platform.posix.ftell(file)
+        } finally {
+            platform.posix.fclose(file)
+        }
+    } ?: return
+    if (size <= LOG_MAX_BYTES) return
+    platform.posix.rename(path, "$path.1")
+}
+
+/**
+ * 一次性迁移（P1-22）：把老版本留在 `Documents/` 的日志挪进 `Caches`。
+ *
+ * - 用 `.legacy` 后缀另存，**不删**（保留现场）；
+ * - 每次 `nativeLog` 都试一次，成功后就再也不会命中（`fopen` 一个不存在的路径等于一次廉价系统调用）；
+ * - 并存标志位只为省这点开销，**即使并发下重复执行也无害**（`rename` 幂等）。
+ */
+private var legacyLogMigrated = false
+
+private fun migrateLegacyLogFile(home: String) {
+    if (legacyLogMigrated) return
+    legacyLogMigrated = true
+    val legacyPath = "$home/Documents/stocknote.log"
+    val probe = platform.posix.fopen(legacyPath, "rb") ?: return
+    platform.posix.fclose(probe)
+    platform.posix.rename(legacyPath, "$home/Library/Caches/stocknote.log.legacy")
 }
