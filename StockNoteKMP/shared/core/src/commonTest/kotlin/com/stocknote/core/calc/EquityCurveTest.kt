@@ -62,6 +62,40 @@ class EquityCurveTest {
     }
 
     @Test
+    fun 明细_涨跌幅等于收盘价变化() {
+        // 1/10 买 100@10；1/11 收盘 11 → 该股当日涨跌幅 = (11 − 10) / 10 = +10%
+        val points = EquityCurve.build(
+            transactions = listOf(tx("2026-01-10", TradeSide.BUY, 100.0, 10.0)),
+            cashFlows = emptyList(),
+            currentCash = 10_000.0,
+            closesBySecurityId = mapOf(
+                "s1" to listOf("2026-01-10" to 10.0, "2026-01-11" to 11.0),
+            ),
+        )
+        assertTrue(
+            points.first { it.date == "2026-01-10" }.chgPctBySecurity.isEmpty(),
+            "曲线首点没有昨收，不该产出涨跌幅",
+        )
+        assertEquals(0.10, points.first { it.date == "2026-01-11" }.chgPctBySecurity["s1"]!!, 1e-9)
+    }
+
+    @Test
+    fun 明细_休市日涨跌幅为零_复牌日按上一收盘() {
+        // 1/10 买 100@10；1/11 休市（无收盘）；1/12 收盘 12
+        // → 1/11 顺延昨天收盘 → 涨跌幅 0；1/12 = (12 − 10) / 10 = +20%
+        val points = EquityCurve.build(
+            transactions = listOf(tx("2026-01-10", TradeSide.BUY, 100.0, 10.0)),
+            cashFlows = emptyList(),
+            currentCash = 10_000.0,
+            closesBySecurityId = mapOf(
+                "s1" to listOf("2026-01-10" to 10.0, "2026-01-12" to 12.0),
+            ),
+        )
+        assertEquals(0.0, points.first { it.date == "2026-01-11" }.chgPctBySecurity["s1"]!!, 1e-9, "休市顺延 → 0")
+        assertEquals(0.20, points.first { it.date == "2026-01-12" }.chgPctBySecurity["s1"]!!, 1e-9, "复牌日按上一收盘")
+    }
+
+    @Test
     fun 明细_清仓当天等于卖出所得减昨日市值() {
         // 1/10 买 100@10；1/11 以 12 全部卖出 → 今日市值 0、昨日 1000、收回 1200 → 盈亏 +200
         val points = EquityCurve.build(

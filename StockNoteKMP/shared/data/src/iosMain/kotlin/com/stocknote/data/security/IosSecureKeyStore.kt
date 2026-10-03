@@ -4,7 +4,6 @@ package com.stocknote.data.security
 
 import com.stocknote.data.platform.IosStartupTrace
 import kotlinx.cinterop.addressOf
-import kotlinx.cinterop.allocArrayOf
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.convert
 import kotlinx.cinterop.memScoped
@@ -24,8 +23,12 @@ import platform.Foundation.CFBridgingRelease
 import platform.Foundation.CFBridgingRetain
 import platform.Foundation.NSData
 import platform.Foundation.NSString
+import platform.Foundation.NSUTF8StringEncoding
 import platform.Foundation.NSUserDefaults
-import platform.posix.memcpy
+// ⚠️ 下面这两个**必须显式 import**：它们是 K/N 生成的顶层扩展（不是 NSData/NSString 的成员），
+//    少了就报 Unresolved reference —— 本文件为此刻骨铭心（白跑 2 轮 CI）。
+import platform.Foundation.create
+import platform.Foundation.dataUsingEncoding
 import platform.Security.SecCopyErrorMessageString
 import platform.Security.SecItemAdd
 import platform.Security.SecItemCopyMatching
@@ -288,31 +291,19 @@ private fun NSString.toKotlinString(): String = this as String
 /**
  * Kotlin `String`（UTF-8）→ `NSData` —— Keychain 的 `kSecValueData` **只认 NSData**。
  *
- * ⚠️ 用 `NSData.create(bytes = allocArrayOf(bytes), length = size.convert())`：这是 K/N 里
- * ByteArray → NSData 的**标准写法**（`+[NSData dataWithBytes:length:]` 的映射）。
- * ⚠️⚠️ **别走构造器那条路**：我一开始按"去掉 `initWith` 前缀"的规律猜了 `NSData(bytes = …, length = …)`，
- * 2026-10-03 CI 实测（run 37126106627）**不成立** —— `NSData` 在 K/N 里只暴露两个构造器：
- * `NSData()` 与 `NSData(coder:)`；`initWithBytes:length:` 只能通过下面这个 `create(...)` 走。
- */
-private fun String.toNSData() = memScoped {
-    val bytes = encodeToByteArray()
-    NSData.create(bytes = allocArrayOf(bytes), length = bytes.size.convert())
-}
-
-/** `NSData` → Kotlin `String`（UTF-8）；解不出来返回 `null`（调用方按"格式坏了"处理）。 */
-private fun NSData.toKotlinStringOrNull(): String? = toByteArrayOrNull()?.decodeToString()
-
-/**
- * `NSData` → `ByteArray`（K/N 标准写法：`bytes` + `length` + `memcpy`）。
+ * ⚠️ 写法**逐字照抄成熟库** `multiplatform-settings` 的 `KeychainSettings`（KMP 圈里 CI 长期验证过的实现）：
+ * `String as NSString` → `dataUsingEncoding(NSUTF8StringEncoding)`。
  *
- * ⚠️ 走 ByteArray 中转、再用 Kotlin 自带的 `decodeToString()` 还原字符串，是为了**绕开**
- * `NSString(data:encoding:)` —— 那个构造器在 K/N 里同样不存在（同一个 CI 报错里一起暴露了）。
+ * ⚠️⚠️ **本文件为此白跑了 2 轮 CI**（run 37126106627 / 37126998784），教训记在这里：
+ *  1. `NSData(bytes = …, length = …)` 与 `NSString(data = …, encoding = …)` 这些**构造器不存在** ——
+ *     K/N 的 `NSData` 只暴露 `NSData()` 与 `NSData(coder:)`；`NSURL(string = …)` 那条经验**不可外推**；
+ *  2. `NSData.create(...)` 这个名字**是对的**，但**缺 `import platform.Foundation.create` 会报
+ *     `Unresolved reference 'create'`** —— K/N 里 Foundation 的这批工厂/方法是**需要显式 import 的顶层扩展**，
+ *     光看名字看不出来（本文件现在同时 import 了 `create` 与 `dataUsingEncoding`）。
  */
-private fun NSData.toByteArrayOrNull(): ByteArray? {
-    val count = length.toInt()
-    if (count <= 0) return null
-    val out = ByteArray(count)
-    out.usePinned { pinned -> memcpy(pinned.addressOf(0), bytes, length) }
-    return out
-}
+private fun String.toNSData(): NSData? = toNSString().dataUsingEncoding(NSUTF8StringEncoding)
+
+/** `NSData`（UTF-8）→ Kotlin `String`；解不出来返回 `null`（调用方按"格式坏了"处理）。 */
+private fun NSData.toKotlinStringOrNull(): String? =
+    NSString.create(data = this, encoding = NSUTF8StringEncoding)?.toKotlinString()
 

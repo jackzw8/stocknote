@@ -41,6 +41,18 @@ object EquityCurve {
          * 默认空 Map，兼容既有调用方与单测。
          */
         val pnlBySecurity: Map<String, Double> = emptyMap(),
+        /**
+         * 当日**各标的的收盘涨跌幅**（老周 2026-10-03；key = securityId，比率如 0.0123 = +1.23%）。
+         *
+         * 口径：`(今收 − 昨收) / 昨收`，取自该标的的**收盘价序列本身**，
+         * 与持仓数量、当日买卖无关（所以"今天新买入"的票也能显示它的当日涨跌）。
+         * 收盘价按「顺延最近一次」取（与市值同口径）：休市日 → 今收 = 昨收 → 涨跌幅 0。
+         * 缺昨收（曲线首日 / 无行情）→ 该标的不产出。外币持仓这里用**原币收盘价**，
+         * 即该股的**价格涨跌幅**（不含汇率变动），与行情软件口径一致。
+         *
+         * 默认空 Map，兼容既有调用方与单测。
+         */
+        val chgPctBySecurity: Map<String, Double> = emptyMap(),
     )
 
     data class Drawdown(val maxDrawdown: Double, val peakDate: String, val troughDate: String)
@@ -311,6 +323,8 @@ object EquityCurve {
         var lastTotal: Double? = null
         // 昨日各标的市值（本位币）—— 算「各标的当日盈亏」要拿它做差分
         var prevMvBySec: Map<String, Double> = emptyMap()
+        // 前一自然日（timeline 是连续自然日）—— 算「各标的当日涨跌幅」的昨收用
+        var prevDate: String? = null
         timeline.forEach { d ->
             // 现金：加上该日（含）之前的所有事件增量
             events[d]?.let { cash += it }
@@ -342,9 +356,20 @@ object EquityCurve {
                 // 小于 0.005 元的视为噪声，不往明细里塞（避免一堆 ±0.00 的行）
                 if (kotlin.math.abs(delta) >= 0.005) pnlBySec[secId] = delta
             }
+            // 各标的**当日涨跌幅**（老周 2026-10-03）：(今收 − 昨收) / 昨收 —— 只用收盘序列，
+            // 与持仓/买卖无关（新买入的票也能给出这只股票当天的涨跌）。缺昨收（曲线首日）→ 不产出。
+            val chgBySec = HashMap<String, Double>()
+            prevDate?.let { pd ->
+                secIds.forEach { secId ->
+                    val c0 = closeOn(secId, pd)
+                    val c1 = closeOn(secId, d)
+                    if (c0 != null && c0 > 0.0 && c1 != null) chgBySec[secId] = (c1 - c0) / c0
+                }
+            }
+            prevDate = d
             prevMvBySec = mvBySec
             val total = cash + marketValue
-            points.add(Point(d, total, pnlBySec))
+            points.add(Point(d, total, pnlBySec, chgBySec))
             lastTotal = total
         }
         return points

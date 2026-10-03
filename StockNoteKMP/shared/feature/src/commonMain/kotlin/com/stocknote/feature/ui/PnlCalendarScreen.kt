@@ -269,6 +269,8 @@ fun PnlCalendarScreen(
                     date = sel,
                     pnl = dailyPnl[sel],
                     pnlBySecurity = selPoint?.pnlBySecurity ?: emptyMap(),
+                    // 各标的当日涨跌幅（老周 2026-10-03）：(今收 − 昨收) / 昨收，随曲线一起算好
+                    chgBySecurity = selPoint?.chgPctBySecurity ?: emptyMap(),
                     securityNames = securityNames,
                     detail = dayDetail,
                     loading = detailLoading,
@@ -396,6 +398,8 @@ private fun DayDetailCard(
     date: String,
     pnl: Double?,
     pnlBySecurity: Map<String, Double>,
+    /** 各标的当日涨跌幅（比率，如 0.0123 = +1.23%）；缺失则不显示括号。 */
+    chgBySecurity: Map<String, Double> = emptyMap(),
     securityNames: Map<String, String>,
     detail: com.stocknote.data.repo.PortfolioRepository.DayDetail?,
     loading: Boolean,
@@ -430,7 +434,7 @@ private fun DayDetailCard(
         Spacer(Modifier.height(14.dp))
         Text("各标的盈亏", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = StockNoteColors.TextPrimary)
         Text(
-            "纯价格与汇率波动（不含分红，分红见下方流水）；% = 该标的占当日盈亏的比例",
+            "纯价格与汇率波动（不含分红，分红见下方流水）；% = 该标的当日涨跌幅",
             fontSize = 11.sp,
             color = StockNoteColors.TextTertiary,
         )
@@ -443,12 +447,12 @@ private fun DayDetailCard(
             )
         } else {
             // 从盈到亏排序（老周 2026-10-03）：原按**绝对值**降序会把「今天最大的亏损」排在最前，
-            // 现改为按**净额**降序 —— 赚得最多的在最上、亏得最多的在最下，并给出各标的占当日盈亏的百分比。
-            // 分母取当日盈亏总额 [pnl]（= 卡片顶部那个大数字）；pnl 为 null / 0 时不出百分比，避免除以 0。
-            val base = pnl?.takeIf { it != 0.0 }
+            // 现改为按**净额**降序 —— 赚得最多的在最上、亏得最多的在最下。
+            // 每只标的后面的 % 是**该股当日涨跌幅**（不是占当日盈亏的比例，老周 2026-10-03 改）。
             pnlBySecurity.entries
                 .sortedByDescending { it.value }
                 .forEach { (id, v) ->
+                    val chg = chgBySecurity[id]
                     Row(
                         Modifier.fillMaxWidth().padding(vertical = 3.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -462,9 +466,9 @@ private fun DayDetailCard(
                         Text(
                             buildString {
                                 append(Format.moneySigned(v))
-                                if (base != null) {
+                                if (chg != null) {
                                     append("  ")
-                                    append(Format.percent(v / base, decimals = 1))
+                                    append(Format.percent(chg, decimals = 2))
                                 }
                             },
                             fontSize = 13.sp,
