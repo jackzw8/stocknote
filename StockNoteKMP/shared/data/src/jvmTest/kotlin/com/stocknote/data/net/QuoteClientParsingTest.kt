@@ -93,4 +93,44 @@ class QuoteClientParsingTest {
         assertEquals(2, partial.size, "坏行应被跳过，其余照常解析")
         assertEquals(listOf("2026-09-30", "2026-09-29"), partial.map { it.date })
     }
+
+    // ------------------------------------------------ 报价日期（P3-36，2026-10-02）
+
+    /** qt[30] 之前全是占位 0（真实响应 88 个字段，这里只造用到的位）。 */
+    private val qtFiller = List(25) { "\"0\"" }.joinToString(",")
+
+    @Test
+    fun `parseQuote 报价日期取 qt30 的前8位`() {
+        // 实测样本（2026-10-02 贵州茅台，国庆休市）：qt[30] = "20260930161458" —— 停在 09-30
+        val body = """{"code":0,"msg":"","data":{"sh600519":{
+            "day":[["2026-09-29","11.0","11.0","11.2","10.9","1000"],
+                   ["2026-09-30","11.0","11.1","11.3","11.0","1000"]],
+            "qt":{"sh600519":["1","贵州茅台","600519","12.0","11.0",$qtFiller,"20260930161458"]}}}}"""
+        val quote = QuoteClient.parseQuote("sh600519", body)
+        assertEquals(12.0, quote?.price ?: 0.0, 1e-9)
+        assertEquals("2026-09-30", quote?.quoteDate, "报价日期 = qt[30] 前 8 位转 yyyy-MM-dd")
+    }
+
+    @Test
+    fun `parseQuote 缺 qt30 时兜底用最后一根K线日期`() {
+        // qt 数组短（只有 5 个字段，真实存在这种残响应）→ 价格走 K 线兜底，日期也走 K 线兜底
+        val body = """{"code":0,"msg":"","data":{"sh000300":{
+            "day":[["2026-09-29","4335.810","4345.210","4359.300","4324.530","148129466.000"],
+                   ["2026-09-30","4356.800","4357.620","4368.610","4341.880","162949626.000"]],
+            "qt":{"sh000300":["1"]}}}}"""
+        val quote = QuoteClient.parseQuote("sh000300", body)
+        assertEquals(4357.62, quote?.price ?: 0.0, 1e-9, "价格走 K 线兜底（最后一根收盘）")
+        assertEquals("2026-09-30", quote?.quoteDate, "日期同样兜底到最后一根 K 线")
+    }
+
+    @Test
+    fun `parseQuote 报价时间格式坏时兜底用K线日期`() {
+        // qt[30] 是非数字（接口改版/字段漂移）→ 不猜 qt 的日期，退到最后一根 K 线（同一语义：
+        // K 线最后一根就是最后交易日），而不是给 null —— 保证守门仍有输入可用
+        val body = """{"code":0,"msg":"","data":{"sh600519":{
+            "day":[["2026-09-30","11.0","11.1","11.3","11.0","1000"]],
+            "qt":{"sh600519":["1","贵州茅台","600519","12.0","11.0",$qtFiller,"not-a-time"]}}}}"""
+        val quote = QuoteClient.parseQuote("sh600519", body)
+        assertEquals("2026-09-30", quote?.quoteDate)
+    }
 }

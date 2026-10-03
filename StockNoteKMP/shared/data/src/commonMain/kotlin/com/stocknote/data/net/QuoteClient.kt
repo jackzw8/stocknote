@@ -89,6 +89,9 @@ class QuoteClient(
             prevClose = navs.getOrNull(1)?.nav,
             source = FUND_SOURCE,
             updatedAtEpochMs = nowEpochMs(),
+            // 净值日期（FSRQ）就是这条"行情"的交易日：当日净值 15:00 后才公布，
+            // 白天拿到的是昨天的净值 —— 报价日期守门（P3-36）会让它当日盈亏计 0，与日历一致
+            quoteDate = latest.date,
         )
     }
 
@@ -1277,6 +1280,9 @@ class QuoteClient(
             var price: Double? = null
             var prevClose: Double? = null
 
+            // K 线行（qfqday 优先，day 兜底）：既给「取价兜底」用，也给「报价日期」兜底用
+            val rows = (node["qfqday"] ?: node["day"])?.let { it as? JsonArray }
+
             // 1) 实时报价字段 qt：[0]=市场 [1]=名称 [2]=代码 [3]=当前价 [4]=昨收
             val qt = node["qt"]?.let { it as? JsonObject }?.get(symbol)?.let { it as? JsonArray }
             if (qt != null && qt.size > 4) {
@@ -1286,7 +1292,6 @@ class QuoteClient(
 
             // 2) 兜底：用最近两根 K 线的收盘价
             if (price == null) {
-                val rows = (node["qfqday"] ?: node["day"])?.let { it as? JsonArray }
                 val closes = rows?.mapNotNull { row ->
                     (row as? JsonArray)?.getOrNull(2)?.let { num(it) }
                 }
@@ -1296,9 +1301,21 @@ class QuoteClient(
                 }
             }
 
+            // 3) 报价日期（P3-36，2026-10-02）：qt[30] = 报价时间（**交易所本地** yyyyMMddHHmmss）。
+            //    实测 2026-10-02（国庆休市）请求贵州茅台返回 "20260930161458" —— 休市时行情
+            //    快照停在最后一个交易日。loadSnapshot 靠它把「报价日期 ≠ 今天」的标的从
+            //    **当日盈亏**里剔除（市值照算）。qt 没给时间时兜底用最后一根 K 线的日期
+            //    （同一语义：K 线最后一根就是最后交易日）。防御式：格式不对就放弃，不猜。
+            val quoteDate = qt?.getOrNull(30)?.let { it as? JsonPrimitive }?.content
+                ?.takeIf { t -> t.length >= 8 && t.take(8).all(Char::isDigit) }
+                ?.let { t -> t.substring(0, 4) + "-" + t.substring(4, 6) + "-" + t.substring(6, 8) }
+                ?: rows?.lastOrNull()?.let { row -> (row as? JsonArray)?.getOrNull(0) }
+                    ?.let { it as? JsonPrimitive }?.content
+                    ?.takeIf { d -> d.length == 10 && d.substring(0, 4).all(Char::isDigit) }
+
             val p = price ?: return null
             if (p <= 0.0) return null
-            return Quote(symbol = symbol, price = p, prevClose = prevClose, source = SOURCE)
+            return Quote(symbol = symbol, price = p, prevClose = prevClose, source = SOURCE, quoteDate = quoteDate)
         }
 
         private fun obj(text: String): JsonObject? =

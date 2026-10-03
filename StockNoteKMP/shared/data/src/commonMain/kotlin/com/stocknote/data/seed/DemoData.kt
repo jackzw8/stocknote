@@ -525,6 +525,7 @@ object DemoData {
                 prev_close = it.prevClose,
                 source = "manual",
                 updated_at = null,
+                quote_date = null,
             )
         }
     }

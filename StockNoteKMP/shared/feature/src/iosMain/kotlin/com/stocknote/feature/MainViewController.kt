@@ -4,6 +4,7 @@ package com.stocknote.feature
 
 import androidx.compose.ui.window.ComposeUIViewController
 import com.stocknote.data.AppContainer
+import com.stocknote.data.platform.IosStartupTrace
 import com.stocknote.data.platform.nativeLog
 import kotlin.experimental.ExperimentalNativeApi
 import kotlin.native.setUnhandledExceptionHook
@@ -105,32 +106,118 @@ fun mainViewController(): UIViewController {
     installCrashDiagnostics()
     nativeLog("[启动] mainViewController() 进入")
 
+    // ⚠️ 2026-10-03（老周真机报「打开白屏，一会儿退出」）：先挂一个**看得见的启动阶段提示**。
+    //    启动失败时它就是错误详情；启动"卡住"时它就是卡住的那一步 —— 白屏时这是唯一的取证窗口。
+    IosStartupTrace.onStage = { text -> showStartupStage(text) }
+    showStartupStage("① 初始化…")
+
     val container = try {
         currentContainer()
     } catch (t: Throwable) {
-        // 同步路径上的失败（建库、NSUserDefaults 读写等）在这里就能带堆栈抓出来；
-        // 异步线程上的由上面的钩子兜住。
-        nativeLog("❌ AppContainer 构造失败: ${t::class.simpleName}: ${t.message}")
-        nativeLog(t.stackTraceToString())
-        showCrashOnScreen(
-            "AppContainer 构造失败: ${t::class.simpleName}: ${t.message}\n\n${t.stackTraceToString()}",
-        )
-        platform.posix.sleep(12u)
+        // 同步路径上的失败（Keychain、开库、播种等）在这里带堆栈抓出来；异步线程上的由上面的钩子兜住。
+        val text = "AppContainer 构造失败: ${t::class.simpleName}: ${t.message}\n\n${t.stackTraceToString()}"
+        nativeLog(text)
+        // ⚠️⚠️ 必须**同步**展示。这里就在主线程上：旧代码 `showCrashOnScreen` 走
+        //    `dispatch_async(主队列)`、紧接着**在主线程**上 `sleep(12)` —— 那条 block 永远排不到
+        //    （被自己的 sleep 挡住），用户只会看到"白屏十几秒然后退出、什么也没说"。
+        //    2026-10-03 老周真机报的"一会儿就退出"，那个"一会儿"就是这 12 秒。
+        showFatalNow(title = "启动失败（请截图发给开发者）", text = text)
+        platform.posix.sleep(20u)
         throw t
     }
     nativeLog("[启动] AppContainer 就绪，开始创建 ComposeUIViewController")
+    showStartupStage("③ 创建界面…")
 
     // 版本号必须在**组合之外**算好：`bundleVersionLabel()` 每次都要读 Info.plist，
     // 没必要跟着重组反复读。
     val versionLabel = bundleVersionLabel()
 
-    return ComposeUIViewController {
+    val root = ComposeUIViewController {
         App(
             container = container,
             versionLabel = versionLabel,
             platformLabel = IOS_MIN_VERSION,
         )
     }
+    // 界面对象建好就收起阶段提示（首帧还没画，但 Compose 之后若崩，进程级钩子会兜住）。
+    hideStartupStage()
+    return root
+}
+
+/**
+ * 启动阶段提示（2026-10-03）。
+ *
+ * ⚠️ 为什么用 `UIAlertController` 而不是自绘一个 UILabel 视图：本项目**只有这套 UIKit 调用经过了
+ * CI 编译验证**（`UIAlertController` / `UIAlertAction` / `UIApplication.keyWindow`）。
+ * 而 iOS 在本机（Windows）编不了、一轮 CI 26 分钟 —— 能复用的 API 就复用，别为了好看冒编译风险。
+ *
+ * ⚠️ 刻意**不给按钮**：它是进度提示，用户点掉就看不到"卡在哪一步"了；界面建好后由
+ * [hideStartupStage] 收起；启动失败时 [showFatalNow] 会换成带按钮的错误详情。
+ *
+ * ⚠️ 只在**主线程**调用（启动链本来就在主线程）。
+ */
+private var startupAlert: UIAlertController? = null
+
+private fun showStartupStage(text: String) {
+    nativeLog("[启动] 阶段：${text.replace('\n', ' ')}")
+    val existing = startupAlert
+    if (existing != null) {
+        // 已经在屏幕上 → 只更新文字（alert 的 message 是可写属性）
+        existing.message = text
+        return
+    }
+    val alert = UIAlertController.alertControllerWithTitle(
+        title = "正在启动…（若卡住，请截图这一步）",
+        message = text,
+        preferredStyle = UIAlertControllerStyleAlert,
+    )
+    val root = rootViewController() ?: return
+    root.presentViewController(alert, animated = false, completion = null)
+    startupAlert = alert
+}
+
+private fun hideStartupStage() {
+    startupAlert?.let { it.dismissViewControllerAnimated(false, completion = null) }
+    startupAlert = null
+}
+
+/**
+ * 启动失败：把一个带完整堆栈的弹窗**同步**放上去（调用方必须是主线程）。
+ *
+ * ⚠️ 与 [showCrashOnScreen] 的分工：那个用于**后台线程**（进程级钩子），需要 `dispatch_async` 切回主线程；
+ * 这个用于**已经在主线程**的启动失败 —— 再 `dispatch_async` 就等于把弹窗排在自己前面，永远弹不出来。
+ */
+private fun showFatalNow(title: String, text: String) {
+    val root = rootViewController()
+    if (root == null) {
+        // 取不到根控制器就只能退回日志（真机上取不到 = 日志也取不到，所以这条只在 CI/模拟器上有意义）
+        nativeLog("❌ 启动失败且取不到 rootViewController：$text")
+        return
+    }
+    // 阶段提示还挂着的话先收掉：同时 present 两个 alert 会失败。
+    startupAlert?.let { it.dismissViewControllerAnimated(false, completion = null) }
+    startupAlert = null
+    val alert = UIAlertController.alertControllerWithTitle(
+        title = title,
+        message = text,
+        preferredStyle = UIAlertControllerStyleAlert,
+    )
+    alert.addAction(
+        UIAlertAction.actionWithTitle("好", UIAlertActionStyleDefault) { _ -> },
+    )
+    root.presentViewController(alert, animated = false, completion = null)
+}
+
+/**
+ * 取根控制器。
+ *
+ * ⚠️ 用 `keyWindow`：它在 iOS 13+ 标了废弃，但**启动早期**（我们的场景）它正是当前唯一可用的窗口，
+ * 比遍历 `windows` 找 `isKeyWindow` 更简单可靠（同 [showCrashOnScreen] 的取舍）。
+ */
+private fun rootViewController(): UIViewController? {
+    val root = UIApplication.sharedApplication.keyWindow?.rootViewController
+    if (root == null) nativeLog("⚠️ 取不到 keyWindow.rootViewController（弹窗将无法显示）")
+    return root
 }
 
 /** 「关于」页显示的最低系统要求（老周 2026-10-02：此前该文案写死在 commonMain，iOS 也显示 Android）。 */
@@ -164,6 +251,7 @@ private var cachedContainer: AppContainer? = null
 /** 懒创建 + 复用：Compose 重组时不能反复建库。 */
 private fun currentContainer(): AppContainer =
     cachedContainer ?: AppContainer(databaseName = AppContainer.DEFAULT_DB_NAME).also {
+        IosStartupTrace.stage("③ 播种演示数据…")
         it.seedDemoDataIfEmpty()
         cachedContainer = it
     }

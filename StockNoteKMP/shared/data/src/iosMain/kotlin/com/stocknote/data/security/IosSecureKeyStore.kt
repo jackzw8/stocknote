@@ -2,6 +2,7 @@
 
 package com.stocknote.data.security
 
+import com.stocknote.data.platform.IosStartupTrace
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.alloc
 import kotlinx.cinterop.convert
@@ -20,7 +21,9 @@ import platform.CoreFoundation.kCFAllocatorDefault
 import platform.CoreFoundation.kCFBooleanTrue
 import platform.Foundation.CFBridgingRelease
 import platform.Foundation.CFBridgingRetain
+import platform.Foundation.NSData
 import platform.Foundation.NSString
+import platform.Foundation.NSUTF8StringEncoding
 import platform.Foundation.NSUserDefaults
 import platform.Security.SecCopyErrorMessageString
 import platform.Security.SecItemAdd
@@ -77,6 +80,10 @@ class IosSecureKeyStore : SecureKeyStore {
     }
 
     override fun getOrCreateDatabasePassphrase(): ByteArray {
+        // 启动阶段上报（2026-10-03）：Keychain 读写是 iOS 启动链的第一步，真机上卡住/失败都要能看见。
+        // ⚠️ 自签场景的高发失败是 `-34018 errSecMissingEntitlement`（签名没带 application-identifier）——
+        //    那种情况下 [failWith] 会把 OSStatus 与人话原因一起抛出来，启动阶段页会原样显示。
+        IosStartupTrace.stage("① 读取/创建密钥（Keychain）…")
         readValue(SecureKeyStore.DATABASE_PASSPHRASE_KEY)?.let { stored ->
             stored.toHexBytesOrNull()?.let { return it }
             error(
@@ -111,7 +118,14 @@ class IosSecureKeyStore : SecureKeyStore {
                 if (status == errSecItemNotFound) {
                     null
                 } else {
-                    (CFBridgingRelease(out.value) as? NSString)?.toKotlinString()
+                    when (val stored: Any? = CFBridgingRelease(out.value)) {
+                        // 正常路径：我们写进去的就是 NSData（见 [toNSData]）
+                        is NSData -> stored.toKotlinStringOrNull()
+                        // 宽容路径：万一历史版本把口令写成了 NSString，也认 —— 否则会被误判成
+                        // "口令格式非法"，进而拒绝启动（那是最坏的结果：账本明明读得出来却进不去）
+                        is NSString -> stored.toKotlinString()
+                        else -> null
+                    }
                 }
             }
         }
@@ -119,7 +133,11 @@ class IosSecureKeyStore : SecureKeyStore {
 
     private fun putValue(account: String, value: String) =
         withAccount(account) { cfAccount, cfService ->
-            val cfValue = CFBridgingRetain(value.toNSString())
+            // ⚠️⚠️ **必须转成 NSData**（2026-10-03 修）：`kSecValueData` 的类型要求就是 Data，
+            //    Apple 文档写明"类型不符 → errSecParam"。此前直接把 Kotlin String 桥成 `NSString`
+            //    塞进去 —— 那在真机上就是 `SecItemAdd` 失败 → 启动即挂（老周 2026-10-03 报的
+            //    "打开白屏、一会儿就退出"最可能就是这么来的）。
+            val cfValue = CFBridgingRetain(value.toNSData())
             try {
                 val added = withDictionary(
                     kSecClass to kSecClassGenericPassword,
@@ -265,4 +283,21 @@ private fun String.toNSString(): NSString = this as NSString
 
 @Suppress("CAST_NEVER_SUCCEEDS")
 private fun NSString.toKotlinString(): String = this as String
+
+/**
+ * Kotlin `String`（UTF-8）→ `NSData` —— Keychain 的 `kSecValueData` **只认 NSData**。
+ *
+ * ⚠️ 用 `NSData(bytes = … , length = …)`：这是 `initWithBytes:length:` 的 K/N 映射，
+ * 命名规则与项目里**已验证过**的 `NSURL(string = …)`（`initWithString:`）完全一致 —— 去掉 `initWith` 前缀。
+ */
+private fun String.toNSData(): NSData {
+    val bytes = encodeToByteArray()
+    return bytes.usePinned { pinned ->
+        NSData(bytes = pinned.addressOf(0), length = bytes.size.toULong())
+    }
+}
+
+/** `NSData`（UTF-8）→ Kotlin `String`；解不出来返回 `null`（调用方按"格式坏了"处理）。 */
+private fun NSData.toKotlinStringOrNull(): String? =
+    NSString(data = this, encoding = NSUTF8StringEncoding)?.toKotlinString()
 

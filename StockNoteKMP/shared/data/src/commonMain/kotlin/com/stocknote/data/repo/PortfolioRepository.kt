@@ -123,12 +123,26 @@ class PortfolioRepository(
 
         // M4 数据真值：fx_rate 表每币种最新生效汇率；缺币种时 FxTable.convertWith 自动兜底固定值
         val fxRates = latestFxRates()
+        val today = todayIso()
+
+        // 报价日期守门（P3-36，老周拍板 B 方案，2026-10-02）：
+        // 休市（或跨时区未开盘）时行情快照停在**最后一个交易日**，Σ(现价 − 昨收) 会把
+        // 「最近交易日的涨跌」当成"当日"—— 真机实测 2026-10-02：A 股快照停在 09-30，
+        // 统计页当日盈亏比盈亏日历多出 3,807（正是 09-30 A 股的涨跌）。
+        // 行情源现在把报价日期带回来了（quote.quoteDate，交易所本地 yyyy-MM-dd）：
+        // 报价日期**不是今天**的标的 → 昨收不进 prevCloses ⇒ ① dayPnl 该标的计 0；
+        // ② 持仓行 prevClose 为 null → TOP5「当日涨跌%」不显示。
+        // **市值不受影响**（现价照用 —— 日历的总资产同样按这个价算，口径一致）。
+        // quoteDate 为 null（手工价 / 旧缓存 / 解析失败）→ 不设防，保持原行为。
+        fun countsAsToday(quoteDate: String?): Boolean = quoteDate == null || quoteDate == today
 
         val prices = LinkedHashMap<String, Double>()
         val prevCloses = LinkedHashMap<String, Double>()
         db.quoteQueries.selectAll().executeAsList().forEach {
             prices[it.symbol] = it.price
-            it.prev_close?.let { pc -> prevCloses[it.symbol] = pc }
+            if (countsAsToday(it.quote_date)) {
+                it.prev_close?.let { pc -> prevCloses[it.symbol] = pc }
+            }
         }
 
         if (refreshQuotes) {
@@ -145,20 +159,27 @@ class PortfolioRepository(
                     writeQuote(symbol, quote)
                     prices[symbol] = quote.price
                     // ⚠️ 2026-10-02 修复（老周报「统计页当日盈亏 ≠ 盈亏日历当日盈亏」）：
-                    // **昨收也必须跟着刷新**。`prevCloses` 是上面从 `quote` 表读出来的 ——
+                    // **昨收也必须跟着刷新**。`prevCloses` 是上面从 `quote` 表读出的 ——
                     // 那是**上一次刷新**落库的值；这里若只更新 `prices`，`dayPnl`
                     // （统计页「当日盈亏」）与持仓 TOP5 的「当日涨跌%」就会用**旧一天的昨收**。
                     // 表现：每天**冷启动的第一次刷新**，当日盈亏实际是**两天的涨跌**（明显偏大），
                     // 同日再刷新一次才变正确 —— 而盈亏日历走的是「逐日总资产差分」，天然是一天的，
                     // 两者必然对不上。下方场外基金那条分支一直是对的，两支写法原先不一致。
-                    quote.prevClose?.let { prevCloses[symbol] = it }
+                    // （P3-36）同样要过报价日期守门：刚取到的行情若仍停在旧交易日（休市），
+                    // 它的昨收只服务"市值/曲线"，不服务"当日涨跌"。
+                    if (countsAsToday(quote.quoteDate)) {
+                        quote.prevClose?.let { prevCloses[symbol] = it }
+                    }
                 }
             }
             funds.forEach { sec ->
                 val q = runCatching { quoteClient.fetchFundQuote(sec.symbol) }.getOrNull() ?: return@forEach
                 writeQuote(sec.symbol, q)
                 prices[sec.symbol] = q.price
-                q.prevClose?.let { prevCloses[sec.symbol] = it }
+                // （P3-36）净值日期 ≠ 今天（当日净值 15:00 后才公布）→ 不算"当日涨跌"
+                if (countsAsToday(q.quoteDate)) {
+                    q.prevClose?.let { prevCloses[sec.symbol] = it }
+                }
             }
             // 港股每手股数（老周 2026-09-28）：港股每手**不固定**（腾讯控股 100 / 小米 200 /
             // 中国移动 500 / 建设银行 1000），整手校验必须用真实值 —— 顺带从行情接口的
@@ -264,6 +285,7 @@ class PortfolioRepository(
                 prev_close = quote.prevClose,
                 source = quote.source,
                 updated_at = quote.updatedAtEpochMs,
+                quote_date = quote.quoteDate,
             )
         }
     }
@@ -453,6 +475,7 @@ class PortfolioRepository(
                         prev_close = quote.prevClose,
                         source = quote.source,
                         updated_at = quote.updatedAtEpochMs,
+                        quote_date = quote.quoteDate,
                     )
                 }
             }
@@ -1205,6 +1228,7 @@ class PortfolioRepository(
                         prevClose = it.prev_close,
                         source = it.source,
                         updatedAtEpochMs = it.updated_at,
+                        quoteDate = it.quote_date,
                     )
                 },
                 dividends = divs,
@@ -1507,6 +1531,7 @@ class PortfolioRepository(
                 prevClose = it.prev_close,
                 source = it.source,
                 updatedAtEpochMs = it.updated_at,
+                quoteDate = it.quote_date,
             )
         }
     }
@@ -1532,6 +1557,7 @@ class PortfolioRepository(
                         prev_close = quote.prevClose,
                         source = quote.source,
                         updated_at = quote.updatedAtEpochMs,
+                        quote_date = quote.quoteDate,
                     )
                 }
             }

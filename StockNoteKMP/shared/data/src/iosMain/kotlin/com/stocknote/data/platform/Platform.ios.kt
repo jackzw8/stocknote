@@ -60,6 +60,7 @@ import platform.posix.tm
 actual fun createEncryptedDriver(databaseName: String, passphrase: ByteArray): SqlDriver {
     // ① 升级兜底：老版本 iOS 装的是**明文库**，拿口令去开它会报 "file is not a database"。
     //    先把明文库改名留档（旧数据不删），再建加密库。
+    IosStartupTrace.stage("② 打开加密库（SQLCipher）…\n" + legacyDatabaseReport(databaseName))
     quarantineLegacyPlaintextDatabase(databaseName)
 
     // ② 加密打开
@@ -73,8 +74,9 @@ actual fun createEncryptedDriver(databaseName: String, passphrase: ByteArray): S
         },
     )
 
-    // ③ 自检：把「到底有没有在用 SQLCipher」写进运行日志
-    reportCipherVersion(driver)
+    // ③ 自检：把「到底有没有在用 SQLCipher」写进运行日志，并回显到启动阶段页
+    val cipherVersion = reportCipherVersion(driver)
+    IosStartupTrace.stage("② 加密库已打开\ncipher_version = " + (cipherVersion ?: "（空 —— 未生效！）"))
     return driver
 }
 
@@ -87,46 +89,83 @@ actual fun createEncryptedDriver(databaseName: String, passphrase: ByteArray): S
  * 处理：只在「文件存在 **且** 头 16 字节是明文 SQLite 魔数」时把它改名成
  * `<名字>.plaintext.bak`（**不删**，用户数据仍可取回），随后照常新建加密库。
  *
- * ⚠️ 路径必须按 sqliter 的真实口径来：它用的是
- * `NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, …)` + `databases` 子目录
- * （见 sqliter `appleMain/DatabaseFileContext.kt`），**不是 Documents**。
+ * ⚠️ 路径**扫多个候选**而不是写死一条：首选仍是 sqliter 源码的口径
+ * （`NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, …)` + `databases` 子目录，
+ * 见 sqliter `appleMain/DatabaseFileContext.kt`），但**万一推断错了**，明文库就不会被改名 →
+ * 加密驱动拿口令去开它 → `file is not a database` → 启动即失败。
+ * 而老周 2026-10-03 真机报的「白屏一会儿就退出」里，这一条正是首要嫌疑；
+ * 多扫两个目录的代价是两次 `fopen`，换来的是"路径推断错也能自愈"。
  *
  * 用 POSIX 读文件头（`fopen`/`fgetc`/`rename`）而不是 Foundation：本文件在 Foundation 的
  * 导出名上踩过坑（见下方 `todayIso` 注释），而且 `getenv("HOME")` 这条路 `nativeLog` 已经在用。
  */
 private fun quarantineLegacyPlaintextDatabase(databaseName: String) {
     val home = platform.posix.getenv("HOME")?.toKString() ?: return
-    val path = "$home/Library/Application Support/databases/$databaseName"
-    // 文件不存在（全新安装，或库里已经是密文）→ 走不到这里
-    val file = platform.posix.fopen(path, "rb") ?: return
+    for (path in legacyDatabaseCandidates(home, databaseName)) {
+        // 文件不存在（全新安装，或库里已经是密文）→ 跳过这个候选
+        val file = platform.posix.fopen(path, "rb") ?: continue
 
-    val looksLikePlaintextSqlite = try {
-        var matched = true
-        for (i in PLAINTEXT_SQLITE_HEADER.indices) {
-            val c = platform.posix.fgetc(file)
-            if (c < 0 || c != PLAINTEXT_SQLITE_HEADER[i].code) {
-                matched = false
-                break
+        val looksLikePlaintextSqlite = try {
+            var matched = true
+            for (i in PLAINTEXT_SQLITE_HEADER.indices) {
+                val c = platform.posix.fgetc(file)
+                if (c < 0 || c != PLAINTEXT_SQLITE_HEADER[i].code) {
+                    matched = false
+                    break
+                }
             }
+            matched
+        } finally {
+            platform.posix.fclose(file)
         }
-        matched
-    } finally {
-        platform.posix.fclose(file)
-    }
-    if (!looksLikePlaintextSqlite) return
+        // ⚠️ 不是明文库（比如已是密文，或口令对不上）→ **一律不动**，让加密驱动如实报错。
+        //    自造"打不开就改名重建"会把"口令丢了"变成静默的数据消失 —— 那正是 P0-2 要防的事。
+        if (!looksLikePlaintextSqlite) continue
 
-    val backupPath = "$path.plaintext.bak"
-    if (platform.posix.rename(path, backupPath) == 0) {
-        SnLog.w(
-            DB_LOG_TAG,
-            "检测到未加密的旧数据库，已改名留档为 $databaseName.plaintext.bak（数据未删除），" +
-                "本机将新建加密库；如需旧数据请用 DB Browser + SQLCipher 打开该文件。",
-        )
-    } else {
-        SnLog.e(
-            DB_LOG_TAG,
-            "旧明文数据库改名失败，加密库将无法打开。请手工删除或改名：$path",
-        )
+        val backupPath = "$path.plaintext.bak"
+        if (platform.posix.rename(path, backupPath) == 0) {
+            SnLog.w(
+                DB_LOG_TAG,
+                "检测到未加密的旧数据库：$path 已改名留档为 *.plaintext.bak（数据未删除），" +
+                    "本机将新建加密库；如需旧数据请用 DB Browser + SQLCipher 打开该文件。",
+            )
+            IosStartupTrace.stage(
+                "② 发现旧明文库，已改名留档（数据未删）：${path.removePrefix("$home/")}",
+            )
+        } else {
+            SnLog.e(DB_LOG_TAG, "旧明文数据库改名失败，加密库将无法打开。请手工删除或改名：$path")
+            IosStartupTrace.stage("② 旧明文库改名失败：${path.removePrefix("$home/")}")
+        }
+    }
+}
+
+/**
+ * 老版本明文库的**候选位置**（2026-10-03 加固，理由见 [quarantineLegacyPlaintextDatabase]）。
+ *
+ * 第一个是 sqliter 源码口径；后两个是"万一"——真机上一旦推断错，加密库就打不开了。
+ */
+private val LEGACY_DB_RELATIVE_DIRS = listOf(
+    "Library/Application Support/databases",
+    "Library/Application Support",
+    "Documents",
+)
+
+private fun legacyDatabaseCandidates(home: String, databaseName: String): List<String> =
+    LEGACY_DB_RELATIVE_DIRS.map { "$home/$it/$databaseName" }
+
+/**
+ * 给启动阶段页用：把候选库文件与"是否存在"列出来。
+ *
+ * 这一行信息在真机上很关键 —— 路径一旦推断错，截图就能直接告诉我们 sqliter 真正用的位置。
+ */
+private fun legacyDatabaseReport(databaseName: String): String {
+    val home = platform.posix.getenv("HOME")?.toKString() ?: return "(取不到 HOME)"
+    return legacyDatabaseCandidates(home, databaseName).joinToString("\n") { path ->
+        val exists = platform.posix.fopen(path, "rb")?.let {
+            platform.posix.fclose(it)
+            true
+        } ?: false
+        (if (exists) "【存在】 " else "（无）　") + path.removePrefix("$home/")
     }
 }
 
@@ -140,7 +179,7 @@ private fun quarantineLegacyPlaintextDatabase(databaseName: String) {
  * 因此这里把「空」当**错误**记进运行日志：用户导出的日志里有这条，就能立刻定位
  * 「以为加密了、其实在写明文」。
  */
-private fun reportCipherVersion(driver: SqlDriver) {
+private fun reportCipherVersion(driver: SqlDriver): String? {
     val version = runCatching {
         driver.executeQuery(
             null,
@@ -158,6 +197,7 @@ private fun reportCipherVersion(driver: SqlDriver) {
     } else {
         SnLog.i(DB_LOG_TAG, "SQLCipher 已生效：cipher_version=$version")
     }
+    return version
 }
 
 /** 明文 SQLite 文件头（16 字节，含结尾的 `\0`）。 */

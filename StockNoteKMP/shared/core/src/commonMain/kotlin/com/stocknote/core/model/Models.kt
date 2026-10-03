@@ -293,6 +293,17 @@ data class Quote(
     val prevClose: Double? = null,
     val source: String,
     val updatedAtEpochMs: Long? = null,
+    /**
+     * 报价日期（P3-36，2026-10-02）：这条行情所属的**交易日**（交易所本地，yyyy-MM-dd）。
+     *
+     * 来源：腾讯 `qt[30]`（报价时间 yyyyMMddHHmmss，实测 2026-10-02 请求 A 股返回 09-30 ——
+     * 休市时行情快照停在最后一个交易日）；基金用净值日期；K 线兜底时用最后一根 K 线日期。
+     *
+     * 用途：`loadSnapshot` 把「报价日期 ≠ 今天」的标的从**当日盈亏**里剔除（市值照算），
+     * 否则休市日会把「最近交易日的涨跌」当成"当日"（实测 10-02 统计页比日历多出
+     * 3,807 ≈ 09-30 A 股的涨跌）。null = 源没给（手工价 / 旧缓存 / 解析失败）→ 不设防。
+     */
+    val quoteDate: String? = null,
 ) {
     val changeRatio: Double?
         get() = prevClose?.takeIf { it != 0.0 }?.let { (price - it) / it }

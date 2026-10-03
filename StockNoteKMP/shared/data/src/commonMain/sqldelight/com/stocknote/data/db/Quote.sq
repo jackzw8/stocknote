@@ -1,10 +1,14 @@
 -- 行情缓存。source 记录来源（tencent / sina / manual），用于降级展示与排查。
+-- quote_date（P3-36，2026-10-02）：行情源给的**报价日期**（交易所本地 yyyy-MM-dd）——
+-- 休市时快照停在最后一个交易日，loadSnapshot 靠它把「报价日期 ≠ 今天」的标的从当日盈亏剔除。
+-- 可空：手工价 / 旧缓存 / 解析失败 → 不设防，保持原行为。
 CREATE TABLE quote (
     symbol TEXT NOT NULL PRIMARY KEY,
     price REAL NOT NULL,
     prev_close REAL,
     source TEXT NOT NULL,
-    updated_at INTEGER
+    updated_at INTEGER,
+    quote_date TEXT
 );
 
 selectAll:
@@ -14,5 +18,5 @@ selectBySymbol:
 SELECT * FROM quote WHERE symbol = ?;
 
 upsert:
-INSERT OR REPLACE INTO quote(symbol, price, prev_close, source, updated_at)
-VALUES (?, ?, ?, ?, ?);
+INSERT OR REPLACE INTO quote(symbol, price, prev_close, source, updated_at, quote_date)
+VALUES (?, ?, ?, ?, ?, ?);
