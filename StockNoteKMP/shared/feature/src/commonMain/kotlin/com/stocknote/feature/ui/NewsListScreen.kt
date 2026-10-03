@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -78,7 +79,20 @@ fun NewsListScreen(
     }
 
     CompositionLocalProvider(LocalPageTextScale provides PAGE_TEXT_SCALE) {
-        val listState = rememberLazyListState()
+        // 返回时定位到之前看的那条（老周 2026-10-03）：初值取 holder 上存的位置，
+        // 离开本页（进详情）时在 onDispose 里存回去 —— holder 跨路由保留、列表 state 不保留。
+        val listState = rememberLazyListState(
+            initialFirstVisibleItemIndex = holder.scrollIndex,
+            initialFirstVisibleItemScrollOffset = holder.scrollOffset,
+        )
+        DisposableEffect(Unit) {
+            onDispose {
+                holder.saveScroll(
+                    listState.firstVisibleItemIndex,
+                    listState.firstVisibleItemScrollOffset,
+                )
+            }
+        }
 
         // 进页面：默认选自选第一只并加载，同时刷新收藏态（老周 2026-09-25 收藏功能）
         LaunchedEffect(Unit) {

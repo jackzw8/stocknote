@@ -80,6 +80,25 @@ class NewsHolder(
     /** 已加载过的标记：进入页面只自动选一次默认标的，用户换过之后不再覆盖 */
     private var bootstrapped = false
 
+    /**
+     * 列表滚动位置（老周 2026-10-03）：从资讯详情**返回时定位到刚才看的那条**。
+     *
+     * holder 已提升到 App 顶层（跨路由不丢），而 `LazyListState` 建在列表页内部、
+     * 切去详情时随组合销毁 → 把「首条可见项 + 偏移」存到 holder 上，返回时用它做初值。
+     * 换标的 / 换分类（[reload] 重新加载第 1 页）时归零，避免停在上一个列表的位置。
+     */
+    var scrollIndex by mutableStateOf(0)
+        private set
+
+    var scrollOffset by mutableStateOf(0)
+        private set
+
+    /** 离开列表页时保存滚动位置（见 [scrollIndex]）。 */
+    fun saveScroll(index: Int, offset: Int) {
+        scrollIndex = index
+        scrollOffset = offset
+    }
+
     val canLoadMore: Boolean get() = !loading && !loadingMore && page < totalPage
 
     /**
@@ -116,6 +135,9 @@ class NewsHolder(
 
     /** 重新加载第 1 页 */
     suspend fun reload() {
+        // 重新加载 = 换了标的 / 分类 → 滚动位置归零（老周 2026-10-03）
+        scrollIndex = 0
+        scrollOffset = 0
         if (symbol.isEmpty()) {
             items = emptyList()
             error = null

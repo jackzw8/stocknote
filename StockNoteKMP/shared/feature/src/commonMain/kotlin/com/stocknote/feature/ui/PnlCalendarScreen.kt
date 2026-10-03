@@ -430,7 +430,7 @@ private fun DayDetailCard(
         Spacer(Modifier.height(14.dp))
         Text("各标的盈亏", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = StockNoteColors.TextPrimary)
         Text(
-            "纯价格与汇率波动（不含分红，分红见下方流水）",
+            "纯价格与汇率波动（不含分红，分红见下方流水）；% = 该标的占当日盈亏的比例",
             fontSize = 11.sp,
             color = StockNoteColors.TextTertiary,
         )
@@ -442,9 +442,12 @@ private fun DayDetailCard(
                 color = StockNoteColors.TextTertiary,
             )
         } else {
-            // 按绝对值降序 —— 一眼看出当天贡献最大的是谁
+            // 从盈到亏排序（老周 2026-10-03）：原按**绝对值**降序会把「今天最大的亏损」排在最前，
+            // 现改为按**净额**降序 —— 赚得最多的在最上、亏得最多的在最下，并给出各标的占当日盈亏的百分比。
+            // 分母取当日盈亏总额 [pnl]（= 卡片顶部那个大数字）；pnl 为 null / 0 时不出百分比，避免除以 0。
+            val base = pnl?.takeIf { it != 0.0 }
             pnlBySecurity.entries
-                .sortedByDescending { kotlin.math.abs(it.value) }
+                .sortedByDescending { it.value }
                 .forEach { (id, v) ->
                     Row(
                         Modifier.fillMaxWidth().padding(vertical = 3.dp),
@@ -457,7 +460,13 @@ private fun DayDetailCard(
                             modifier = Modifier.weight(1f),
                         )
                         Text(
-                            Format.moneySigned(v),
+                            buildString {
+                                append(Format.moneySigned(v))
+                                if (base != null) {
+                                    append("  ")
+                                    append(Format.percent(v / base, decimals = 1))
+                                }
+                            },
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
                             color = if (v >= 0) StockNoteColors.Up else StockNoteColors.Down,
