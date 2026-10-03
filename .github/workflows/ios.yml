@@ -108,17 +108,26 @@ jobs:
         working-directory: StockNoteKMP
         run: |
           chmod +x gradlew
-          ./gradlew :shared:feature:linkReleaseFrameworkIosArm64 --no-daemon --stacktrace
+          # ⭐ 2026-10-03：链接目标**跟随手动触发时选的 configuration** ——
+          #   Release（默认，出正式包）：linkReleaseFrameworkIosArm64，实测约 14 分钟；
+          #   Debug（只想快跑一轮验证"代码能不能编译/能不能起来"）：linkDebugFrameworkIosArm64，
+          #   通常几分钟。此前这里写死 Release，于是即使选了 Debug 也照样干等 14 分钟。
+          #   （Xcode 侧的 script phase 本来就会按 CONFIGURATION 自动选 Debug/Release，无需改。）
+          if [ "${{ inputs.configuration }}" = "Debug" ]; then
+            ./gradlew :shared:feature:linkDebugFrameworkIosArm64 --no-daemon --stacktrace
+          else
+            ./gradlew :shared:feature:linkReleaseFrameworkIosArm64 --no-daemon --stacktrace
+          fi
 
-      # ⚠️ 诊断用（2026-10-01）：Compose Multiplatform 1.10+ 的 iOS 实现（CMPLayoutRegion）
-      # 引用了 iOS 26 才有的 `UIViewLayoutRegion`（在 SwiftUICore 里）。
-      # 这里直接看 framework 里该符号的**链接属性**：
+      # ⚠️ 诊断用（2026-10-01，保留：只花 1 秒，且回答"最低可用 iOS 是多少"这个真问题）：
+      # Compose Multiplatform 1.10+ 的 iOS 实现（CMPLayoutRegion）引用了 iOS 26 才有的
+      # `UIViewLayoutRegion`（在 SwiftUICore 里）。这里看该符号的**链接属性**：
       #   weak external  → 旧系统上符号缺失时指针为 nil，只要 CMP 内部有 @available 判断就不会崩；
       #   external       → 旧系统 dyld 会因找不到符号而**启动即崩**（等于只能 iOS 26+ 用）。
       - name: 检查 UIViewLayoutRegion 的链接属性（判断最低可用 iOS）
         working-directory: StockNoteKMP
         run: |
-          FW=$(find shared/feature/build -type f -name 'SharedUI' -path '*releaseFramework*' | head -1)
+          FW=$(find shared/feature/build -type f -name 'SharedUI' -path '*Framework*' | head -1)
           echo "framework binary: $FW"
           if [ -n "$FW" ]; then
             nm -m "$FW" 2>/dev/null | grep -iE 'UIViewLayoutRegion|SwiftUICore' || echo '(未找到该符号)'
@@ -138,7 +147,8 @@ jobs:
         working-directory: StockNoteKMP
         run: |
           echo "===== ① 仓库里的 Info.plist 关键键（文件本身没问题吧？）====="
-          for k in CADisableMinimumFrameDurationOnPhone CFBundleShortVersionString CFBundleVersion CFBundleDisplayName CFBundleIconName UILaunchScreen; do
+          # ⚠️ 2026-10-03：不再校验图标键（CFBundleIconName）—— 图标已在真机确认显示正常（老周）。
+          for k in CADisableMinimumFrameDurationOnPhone CFBundleShortVersionString CFBundleVersion CFBundleDisplayName UILaunchScreen; do
             printf '%-45s = ' "$k"
             /usr/libexec/PlistBuddy -c "Print :$k" iosApp/iosApp/Info.plist 2>/dev/null || echo "!!! 缺失 !!!"
           done
@@ -157,7 +167,20 @@ jobs:
             -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             build
+
+      # ⭐ 2026-10-03 加：把 SwiftPM 的克隆目录缓存起来。
+      # 里面是 SQLCipher 的预编译 xcframework（几十 MB），**每次运行都要重新 clone/下载**，
+      # 而内容只随版本变化（版本在 project.yml 里写死 4.17.0）—— 属于纯浪费。
+      - name: 缓存 SwiftPM 依赖（SQLCipher）
+        if: ${{ !inputs.build_simulator }}
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.spm-packages
+          key: spm-${{ runner.os }}-sqlcipher-4.17.0
+          restore-keys: |
+            spm-${{ runner.os }}-
 
       # ⚠️⚠️ 2026-10-02 新增：**预解析 SwiftPM 依赖（SQLCipher）**。
       # 起因：第 3 轮 CI 终于走到 xcodebuild（前面的 K/N 编译与链接都过了），却倒在
@@ -225,94 +248,39 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             archive
 
-      # ⚠️ P0-1（2026-10-02）：接入 SQLCipher 后，**最危险的失败方式是"静默写成明文"**——
-      # 少了 `-lsqlite3` 但 SQLCipher 又没链上时，符号可能从别处解析，`PRAGMA key` 变成空操作。
-      # 归档成功 ≠ 加密生效，所以这里直接查产物（不是查配置）。
-      - name: 校验 SQLCipher 真的链上了（P0-1）
+      # ⚠️ 产物自检（P0-1，2026-10-02 起；**2026-10-03 按老周要求大幅精简**）：
+      # **只留一条真正的红线** —— SQLCipher 有没有真的链上。
+      # 为什么不能省：接入 SQLCipher 后若少了 `-lsqlite3` 而 SQLCipher 又没链上，`PRAGMA key` 会
+      #   **静默变成空操作**、库仍是明文，而归档照样成功（"以为加密了"是最危险的失败方式）。
+      # 为什么这么短：这两条断言只花几秒；而**图标**（P1-5，真机已确认显示正常）、`cipher_version`
+      #   标记串、`nm` 符号清单、版本号回显、bundle 目录列表这些"查产物"的项**老周 2026-10-03 要求删掉**
+      #   —— 它们既不影响成败判断，也占不了多少时间（全部合计约 9 秒，真正的耗时在 K/N 链接与 Xcode 归档）。
+      - name: 产物自检（SQLCipher 必须链上并嵌入）（P0-1）
         if: ${{ !inputs.build_simulator }}
         run: |
-          set -u
+          set -eu
           APP="$RUNNER_TEMP/StockNoteApp.xcarchive/Products/Applications/StockNoteApp.app"
-          BIN="$APP/StockNoteApp"
           FW="$APP/Frameworks/SQLCipher.framework/SQLCipher"
-
-          # ⚠️⚠️ 2026-10-02 第 6 轮实测修正（run 37003261045）：SQLCipher 经 SwiftPM 进来的是
-          # **动态 framework**（otool -L 显示 @rpath/SQLCipher.framework/SQLCipher）—— 加密实现与
-          # 字符串（含 cipher_version）都在 Frameworks/SQLCipher.framework 里，**不在主二进制里**。
-          # 旧版护栏拿 strings 查主二进制，把"链上了"误判成"没链上"。
-          # 正确姿势：① 主二进制链 SQLCipher.framework 且不得出现系统 libsqlite3；
-          #           ② framework 必须被嵌入 app（没嵌 → 真机启动即 dyld 闪退）；
-          #           ③ cipher_version 标记串去 framework 的二进制里找。
-
-          echo "===== ① 主二进制：必须链 SQLCipher.framework，且不得出现系统 libsqlite3 ====="
-          otool -L "$BIN" | sed -n '1,40p'
-          if otool -L "$BIN" | grep -q 'libsqlite3'; then
-            echo "!!! 仍然链接了系统 libsqlite3 —— PRAGMA key 会静默失效，库仍是明文 !!!"
+          if otool -L "$APP/StockNoteApp" | grep -q 'libsqlite3'; then
+            echo "!!! 仍依赖系统 libsqlite3 —— PRAGMA key 会静默失效、库仍是明文 !!!"
             exit 1
           fi
-          if ! otool -L "$BIN" | grep -q 'SQLCipher.framework'; then
+          if ! otool -L "$APP/StockNoteApp" | grep -q 'SQLCipher.framework'; then
             echo "!!! 主二进制没有链接 SQLCipher.framework !!!"
             exit 1
           fi
-          echo "OK：链接的是 @rpath/SQLCipher.framework，未依赖系统 libsqlite3"
-
-          echo "===== ② SQLCipher.framework 必须被嵌入 app（否则真机启动即 dyld 闪退）====="
           if [ ! -f "$FW" ]; then
-            echo "!!! bundle 里没有 Frameworks/SQLCipher.framework/SQLCipher !!!"
-            ls -1 "$APP/Frameworks" 2>/dev/null || echo "(Frameworks 目录不存在)"
+            echo "!!! bundle 里没有 Frameworks/SQLCipher.framework/SQLCipher（真机启动会 dyld 闪退）!!!"
             exit 1
           fi
-          echo "OK：已嵌入（大小 $(du -h "$FW" | cut -f1)）"
-
-          echo "===== ③ cipher_version 标记串去 framework 二进制里找 ====="
-          if strings -a "$FW" | grep -m3 -i 'cipher_version'; then
-            echo "OK：找到 cipher_version（SQLCipher 的 pragma 名）"
-          else
-            echo "!!! SQLCipher.framework 里没有 cipher_version 标记 !!!"
+          if ! strings -a "$FW" | grep -qi 'cipher_version'; then
+            echo "!!! SQLCipher.framework 里没有 cipher_version 标记（不像真的 SQLCipher）!!!"
             exit 1
           fi
-
-          echo "===== ④ 附带：Kotlin 侧 SharedUI.framework 也不得指向系统 sqlite3 ====="
-          SU="$APP/Frameworks/SharedUI.framework/SharedUI"
-          if [ -f "$SU" ]; then
-            if otool -L "$SU" | grep -q 'libsqlite3'; then
-              echo "!!! SharedUI.framework 链了系统 libsqlite3 !!!"
-              exit 1
-            fi
-            echo "OK：SharedUI.framework 未依赖系统 libsqlite3"
-          else
-            echo "(没找到 SharedUI.framework，跳过 ④ —— 请人工确认)"
-          fi
-
-          echo "===== ⑤ 未解析的 sqlite3_* 符号（仅参考：release 会 strip，可能为空）====="
-          nm -u "$BIN" 2>/dev/null | grep '_sqlite3_' | head -20 || echo "(无)"
-
-      # ⚠️ P1-5（2026-10-02）：图标这类**资源**问题不会让归档失败（装出来只是白图标），
-      # 所以必须查产物。之前项目在 `iosApp/` 下**根本没有 Assets.xcassets**。
-      - name: 校验 App 图标进了包（P1-5）
-        if: ${{ !inputs.build_simulator }}
-        run: |
-          set -u
-          APP="$RUNNER_TEMP/StockNoteApp.xcarchive/Products/Applications/StockNoteApp.app"
-          echo "===== ① 编译后的资源目录 ====="
-          ls -1 "$APP" | sed -n '1,60p'
-          test -f "$APP/Assets.car" && echo "OK：Assets.car 存在" || { echo "!!! 没有 Assets.car !!!"; exit 1; }
-
-          echo "===== ② Info.plist 的图标键 ====="
-          /usr/libexec/PlistBuddy -c "Print :CFBundleIconName" "$APP/Info.plist" \
-            || { echo "!!! Info.plist 缺 CFBundleIconName !!!"; exit 1; }
-          # ⚠️ 图标 PNG 由 actool 生成到 bundle 根目录。但**不能拿它当硬断言**：
-          # 新版 Xcode 可能只留 Assets.car（不再往根目录放 AppIcon*.png）——
-          # 那属于"换了实现"，不代表图标坏了，所以这里只提示、不失败。
-          ls "$APP" | grep -i '^AppIcon' || echo "(根目录无 AppIcon*.png —— 新版 Xcode 可能只留 Assets.car，非致命)"
-          # 硬判据只有上面两条：Assets.car 存在 + Info.plist 有 CFBundleIconName。
-          # （图标本身对不对只能靠真机看 —— 这类问题不会让归档失败。）
-
-          echo "===== ③ 版本号（应仍是 1.1.8 / 58）====="
-          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP/Info.plist"
-          /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP/Info.plist"
+          echo "OK：SQLCipher 已链上并嵌入（$(du -h "$FW" | cut -f1)）"
 
       - name: 打成未签名 IPA
         if: ${{ !inputs.build_simulator }}
