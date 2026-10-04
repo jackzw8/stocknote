@@ -335,6 +335,12 @@ actual fun nativeLog(message: String) {
 
         val file = platform.posix.fopen(path, "a") ?: return
         try {
+            // ⭐ 2026-10-03：**每行带时间戳**。老周把日志取出来后（`Library/Caches/stocknote.log`）
+            // 发现每行都没有时间 —— 排查时看不出「启动各阶段各花多久」「两条日志隔了多久」，
+            // 日志的价值大打折扣（比如那 23 条重复的 `[NAV]` 就没法判断是"连点"还是"同一个回调重入"）。
+            // 口径与 `SnLog.dump()` 的 stamp 一致（`formatLocalDateTime` 到分钟 + 补秒/毫秒）。
+            platform.posix.fputs(logStamp(), file)
+            platform.posix.fputs(" ", file)
             platform.posix.fputs(message.replace("\n", " "), file)
             platform.posix.fputs("\n", file)
             platform.posix.fflush(file)
@@ -346,6 +352,14 @@ actual fun nativeLog(message: String) {
 
 /** 日志文件相对沙盒的位置（P1-22：`Library/Caches/` 不参与备份）。 */
 private const val LOG_FILE_RELATIVE_PATH = "Library/Caches/stocknote.log"
+
+/** 落盘日志每行的时间戳：`yyyy-MM-dd HH:mm:ss.SSS`（与 `SnLog.dump()` 同口径）。 */
+private fun logStamp(): String {
+    val epochMs = nowEpochMs()
+    val second = ((epochMs / 1000) % 60).toString().padStart(2, '0')
+    val milli = (epochMs % 1000).toString().padStart(3, '0')
+    return formatLocalDateTime(epochMs) + ":" + second + "." + milli
+}
 
 /** 单个日志文件的上限（P1-22）。 */
 private const val LOG_MAX_BYTES = 1L * 1024 * 1024

@@ -252,13 +252,19 @@ private class WebViewNavigationDelegate(
 
             isHttpUrl(target) -> {
                 decisionHandler(WKNavigationActionPolicy.WKNavigationActionPolicyCancel)
-                SnLog.i(NAV_LOG_TAG, "iOS 站外链接交给系统浏览器：$target")
-                onExternalNavigation(target)
+                // ⚠️ 去重（2026-10-03 真机实测）：同一次点击这里会被**重复调用 23 次**
+                //（WKWebView 在导航被 cancel 后会重试）。不去重就会反复弹系统浏览器、还把日志刷爆。
+                if (InAppNavigationDedupe.shouldHandle(target)) {
+                    SnLog.i(NAV_LOG_TAG, "iOS 站外链接交给系统浏览器：$target")
+                    onExternalNavigation(target)
+                }
             }
 
             else -> {
                 decisionHandler(WKNavigationActionPolicy.WKNavigationActionPolicyCancel)
-                SnLog.i(NAV_LOG_TAG, "iOS 已拦下非 http(s) 导航：$target")
+                if (InAppNavigationDedupe.shouldHandle(target)) {
+                    SnLog.i(NAV_LOG_TAG, "iOS 已拦下非 http(s) 导航：$target")
+                }
             }
         }
     }

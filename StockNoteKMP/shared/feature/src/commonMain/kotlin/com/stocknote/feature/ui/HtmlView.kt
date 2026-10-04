@@ -2,6 +2,7 @@ package com.stocknote.feature.ui
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import com.stocknote.data.platform.nowEpochMs
 
 /**
  * 站内网页视图（老周 2026-09-24）：用于新闻正文 —— 腾讯行情资讯的正文页是 H5（SPA，
@@ -50,7 +51,10 @@ expect fun rememberBrowserOpener(): (String) -> Unit
  */
 internal val InAppNavigationHosts = listOf(
     "gu.qq.com", // 腾讯资讯正文（资讯详情走的就是这个域）
+    "finance.qq.com", // 腾讯财经/公告文件的域 —— ⚠️ 2026-10-03 真机补：公告 PDF 在
+    // `file.finance.qq.com/.../xxx.PDF`，不在白名单时点一次就被甩到系统浏览器
     "eastmoney.com", // 东方财富（资讯、公告）
+    "dfcfw.com", // 东财的静态/文件域（东财公告 PDF 走这里，同上）
     "cninfo.com.cn", // 巨潮资讯（公告原文）
     "gtimg.cn", // 腾讯的行情静态资源/图片域
 )
@@ -99,6 +103,41 @@ internal fun urlHost(url: String): String? {
     val hostPort = authority.substringAfterLast('@') // 去掉 user:pass@
     val host = hostPort.substringBefore(':') // 去掉 :port
     return host.trim().trimEnd('.').lowercase().ifEmpty { null }
+}
+
+/**
+ * 导航拦截的**去重**（2026-10-03 真机回归发现，两端共用）。
+ *
+ * ## 现象
+ * 老周在 iPad 上点了一次腾讯公告的 PDF 链接，落盘日志里
+ * `[NAV] iOS 站外链接交给系统浏览器：https://file.finance.qq.com/…/1225475868.PDF`
+ * **刷了 23 条完全相同的行** ⇒ `decidePolicyForNavigationAction`（iOS）/
+ * `shouldOverrideUrlLoading`（Android）对**同一次点击会被重复触发**
+ *（WKWebView 在导航被 cancel 之后会重试同一导航，这是已知行为）。
+ *
+ * ## 危害
+ * 每重复一次就 `openURL` 一次 ⇒ **反复弹系统浏览器**；日志也被刷爆，
+ * 把真正有用的行（比如 `[DB]` 自检）顶出可视范围。
+ *
+ * ## 处理
+ * 同一个 URL 在 [WINDOW_MS] 内只"处理"一次（只外放一次、只记一条日志）；重复的直接静默取消。
+ * ⚠️ 用**时间窗口**而不是"记住上次"：用户过一会儿再点同一个链接，那是他的真实意图，不能吞掉。
+ */
+internal object InAppNavigationDedupe {
+
+    private const val WINDOW_MS = 1_500L
+
+    private var lastUrl: String? = null
+    private var lastAtMs: Long = 0
+
+    /** `true` = 这次该处理（首次，或距上次已过窗口）；`false` = 短时间内重复，忽略即可。 */
+    fun shouldHandle(url: String): Boolean {
+        val nowMs = nowEpochMs()
+        val isRepeat = url == lastUrl && nowMs - lastAtMs < WINDOW_MS
+        lastUrl = url
+        lastAtMs = nowMs
+        return !isRepeat
+    }
 }
 
 /**

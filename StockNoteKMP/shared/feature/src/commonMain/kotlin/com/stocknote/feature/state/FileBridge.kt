@@ -5,9 +5,16 @@ package com.stocknote.feature.state
  * 由用户自选保存位置与文件，而不是固定写 `Documents/StockNote/`。
  *
  * shared 层不能直接用 Android 的 ActivityResult API，因此这里定义接口 + 全局持有；
- * **Android 侧在 MainActivity 注册 SAF launcher 后注入实现**（iOS 侧将来用 UIDocumentPicker）。
+ * **Android 侧在 MainActivity 注册 SAF launcher 后注入实现**。
  *
- * 未注入实现时（如 iOS 还没接）调用返回 null，UI 会提示"当前平台不支持选择文件"。
+ * ⚠️ 各平台现状（2026-10-03）：
+ *  - **Android**：完整（SAF，导出 + 导入 + 选图）；
+ *  - **桌面**：完整（Swing 文件对话框）；
+ *  - **iOS**：`IosFileBridge` —— **导出方向已可用**（POSIX 写进 `Documents/`，用户能拿到文件），
+ *    **导入方向（`openFile` / `pickImage`）尚未接入**（需要 `UIDocumentPicker` / `PHPicker`，
+ *    而 iOS 只能靠 CI 编译，得先找到可靠的 K/N 写法再动）。未接入的方向**如实抛错**、不静默。
+ *
+ * 未注入实现时（历史上 iOS 就是这样）调用会报「当前平台未接入系统文件选择器」。
  */
 interface FileBridge {
 

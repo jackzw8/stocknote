@@ -6,6 +6,7 @@ import androidx.compose.ui.window.ComposeUIViewController
 import com.stocknote.data.AppContainer
 import com.stocknote.data.platform.IosStartupTrace
 import com.stocknote.data.platform.nativeLog
+import com.stocknote.feature.state.FileBridgeHolder
 import kotlin.experimental.ExperimentalNativeApi
 import kotlin.native.setUnhandledExceptionHook
 import platform.Foundation.NSBundle
@@ -110,6 +111,11 @@ fun mainViewController(): UIViewController {
     //    启动失败时它就是错误详情；启动"卡住"时它就是卡住的那一步 —— 白屏时这是唯一的取证窗口。
     IosStartupTrace.onStage = { text -> showStartupStage(text) }
     showStartupStage("① 初始化…")
+
+    // ⭐ 2026-10-03：注入 iOS 的文件桥 —— 此前它是空的，导致「导出运行日志 / 导出 CSV /
+    // 备份导出 / 下载模板」在 iPad 上全部报「当前平台未接入系统文件选择器」（老周真机报的）。
+    // 必须在 UI 起来之前注入（导出动作随时可能被点）。
+    FileBridgeHolder.impl = IosFileBridge()
 
     val container = try {
         currentContainer()

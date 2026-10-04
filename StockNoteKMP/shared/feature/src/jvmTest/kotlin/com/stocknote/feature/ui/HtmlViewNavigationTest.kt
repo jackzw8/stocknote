@@ -46,6 +46,30 @@ class HtmlViewNavigationTest {
     }
 
     @Test
+    fun `腾讯公告文件域与东财文件域也放行`() {
+        // ⚠️ 2026-10-03 真机回归：公告 PDF 落在 `file.finance.qq.com`，当时不在白名单 ⇒
+        // 老周点一次公告就被甩到系统浏览器（日志里同一条刷了 23 行）。这两个域现已补进白名单。
+        assertTrue(
+            isInAppNavigationAllowed(
+                "https://file.finance.qq.com/finance/hs/pdf/2026/08/15/1225475868.PDF",
+            ),
+        )
+        assertTrue(isInAppNavigationAllowed("https://pdf.dfcfw.com/pdf/H2_AN2026_1.pdf"))
+    }
+
+    @Test
+    fun `同一 URL 短时间内的重复导航会被去重`() {
+        // 真机实测：同一次点击，导航回调被**重复触发 23 次**。不去重就会反复弹系统浏览器 + 刷爆日志。
+        // ⚠️ 本用例依赖 1.5 秒的时间窗口，只断言"紧接着的重复被吞掉"，不睡等窗口过期（避免用例变慢/变飘）。
+        val url = "https://file.finance.qq.com/finance/hs/pdf/x.PDF"
+        assertTrue(InAppNavigationDedupe.shouldHandle(url), "首次应当处理")
+        assertFalse(InAppNavigationDedupe.shouldHandle(url), "紧随其后的重复应当被吞掉")
+        assertFalse(InAppNavigationDedupe.shouldHandle(url), "连续多次重复都应被吞掉")
+        // 换一个 URL 立刻算新的（用户点了另一条链接，不能吞）
+        assertTrue(InAppNavigationDedupe.shouldHandle("https://example.com/a"))
+    }
+
+    @Test
     fun `白名单外的网页不放行_但仍可交给系统浏览器`() {
         assertFalse(isInAppNavigationAllowed("https://example.com/article"))
         assertTrue(isHttpUrl("https://example.com/article"))

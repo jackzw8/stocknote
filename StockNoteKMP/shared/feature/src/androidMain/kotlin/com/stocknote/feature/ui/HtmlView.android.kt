@@ -64,12 +64,18 @@ actual fun HtmlView(url: String, modifier: Modifier) {
                         return when {
                             isInAppNavigationAllowed(target) -> false
                             isHttpUrl(target) -> {
-                                SnLog.i(NAV_LOG_TAG, "站外链接交给系统浏览器：$target")
-                                openInSystemBrowser(view.context, target)
+                                // ⚠️ 去重（2026-10-03，与 iOS 同因）：同一次点击本回调可能被重复触发，
+                                // 不去重会反复启动系统浏览器（详见 commonMain 的 InAppNavigationDedupe）。
+                                if (InAppNavigationDedupe.shouldHandle(target)) {
+                                    SnLog.i(NAV_LOG_TAG, "站外链接交给系统浏览器：$target")
+                                    openInSystemBrowser(view.context, target)
+                                }
                                 true
                             }
                             else -> {
-                                SnLog.i(NAV_LOG_TAG, "已拦下非 http(s) 导航：$target")
+                                if (InAppNavigationDedupe.shouldHandle(target)) {
+                                    SnLog.i(NAV_LOG_TAG, "已拦下非 http(s) 导航：$target")
+                                }
                                 true
                             }
                         }
