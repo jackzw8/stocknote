@@ -91,6 +91,32 @@ internal fun isHttpUrl(url: String): Boolean {
 }
 
 /**
+ * 该 URL 是否指向一个 **PDF 文件**（老周 2026-10-04）。
+ *
+ * ## 为什么需要
+ * 资讯 →「公告」的正文是腾讯 H5 壳，点里面的「文件」会跳到公告 PDF
+ *（实测形如 `https://file.finance.qq.com/finance/hs/pdf/2026/08/15/1225475868.PDF`，东财是 `pdf.dfcfw.com/…pdf`）。
+ * 这些域已进白名单，所以导航会**留在内嵌页里** —— 但 **Android 的 WebView 渲染不了 PDF**
+ *（这是 WebView 的能力边界，不是 bug）⇒ 页面一片空白/直接触发下载。
+ * 靠这个判据把它识别出来，交给 **App 内置的 PDF 阅读器**（见 `HtmlView.android.kt`）。
+ *
+ * ## 判据
+ * 取**路径以 `.pdf` 结尾**（忽略大小写、先把 query / fragment 摘掉）。
+ * 不看响应头的 `Content-Type` —— 这里只有 URL 可用；真下载下来若不是 PDF，
+ * 内置阅读器会**如实报错**（不会静默显示空白）。
+ *
+ * ⚠️ 只认 `http(s)`：`data:` / `blob:` 之类页面内部的 scheme 一律不算（放行给 WebView 自己处理）。
+ */
+internal fun isPdfUrl(url: String): Boolean {
+    val trimmed = url.trim()
+    if (!isHttpUrl(trimmed)) return false
+    val path = trimmed.substringAfter("://", "")
+        .substringBefore('#')
+        .substringBefore('?')
+    return path.lowercase().endsWith(".pdf")
+}
+
+/**
  * 从 URL 里取 host。
  *
  * ⚠️ 刻意**手写字符串处理**而不是 `java.net.URI`：commonMain 禁止 JVM 专有 API，

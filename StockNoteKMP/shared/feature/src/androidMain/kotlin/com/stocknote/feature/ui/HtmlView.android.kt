@@ -9,7 +9,13 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import com.stocknote.data.log.SnLog
@@ -25,10 +31,41 @@ import com.stocknote.data.log.SnLog
  *  - ⚠️ 用 `AndroidView` 的 `factory` 只创建一次、`update` 里 loadUrl：
  *    不要每次重组都重建 WebView（会不断重新加载、闪屏）。
  *  - 页面加载完成后注入 [CleanPageJs]，去掉腾讯正文页里的**自选股推广条**（老周 2026-09-24 提出）。
+ *  - **公告 PDF 走内置阅读器**（老周 2026-10-04）：WebView 渲染不了 PDF，
+ *    命中 [isPdfUrl] 的导航不交给 WebView，改为显示 [PdfPagesView]（网页仍留在下层，关掉即回）。
+ */
+@Composable
+actual fun HtmlView(url: String, modifier: Modifier) {
+    // ---- 内置 PDF 阅读（老周 2026-10-04）----
+    // 公告里的「文件」是 PDF，而 **WebView 渲染不了 PDF** → 由 [isPdfUrl] 识别、切到内置阅读器。
+    // ⚠️ 用 Box 把网页**留在组合里**（只是被阅读器盖住）：关掉 PDF 后回到原网页，不重新加载、
+    // 用户在公告列表里的滚动位置也不会丢。
+    var pdfUrl by remember { mutableStateOf<String?>(null) }
+
+    Box(modifier) {
+        NewsWebView(
+            url = url,
+            onPdf = { pdfUrl = it },
+            modifier = Modifier.fillMaxSize(),
+        )
+        pdfUrl?.let { target ->
+            PdfPagesView(
+                url = target,
+                onClose = { pdfUrl = null },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
+}
+
+/**
+ * 资讯正文用的内嵌 WebView —— 从 [HtmlView] 抽出来，便于与内置 PDF 阅读器**叠放**。
+ *
+ * @param onPdf 命中 PDF 链接时回调（由 [HtmlView] 切到内置阅读器，而不是让 WebView 去加载）
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-actual fun HtmlView(url: String, modifier: Modifier) {
+private fun NewsWebView(url: String, onPdf: (String) -> Unit, modifier: Modifier = Modifier) {
     AndroidView(
         modifier = modifier,
         factory = { ctx ->
@@ -61,6 +98,14 @@ actual fun HtmlView(url: String, modifier: Modifier) {
                         request: WebResourceRequest,
                     ): Boolean {
                         val target = request.url.toString()
+                        // ⚠️ **PDF 必须抢在"白名单"之前判**（老周 2026-10-04）：
+                        // 公告文件域（finance.qq.com / dfcfw.com）已在白名单里 ⇒ 放行的话导航会留在
+                        // WebView，而 **WebView 渲染不了 PDF** → 页面空白/触发下载。这里直接接管。
+                        if (isPdfUrl(target)) {
+                            SnLog.i(NAV_LOG_TAG, "PDF 改用内置阅读器：$target")
+                            onPdf(target)
+                            return true
+                        }
                         return when {
                             isInAppNavigationAllowed(target) -> false
                             isHttpUrl(target) -> {
@@ -109,15 +154,19 @@ actual fun HtmlView(url: String, modifier: Modifier) {
                     }
                 }
                 // 公告正文常见形态是「独立文件 + 点击下载文件」（老周 2026-09-24 问的下载）：
-                // WebView 自身**不支持文件下载**（不设监听则点击毫无反应），这里交给系统处理
-                // （弹出的选择器里用户可用浏览器/下载器打开或保存 PDF）。
+                // WebView 自身**不支持文件下载**（不设监听则点击毫无反应）。
                 // ⚠️ P1-20：只放行 http(s)；非 http(s) 的"下载链接"（含 `intent://`）
                 // **不处理**，避免把任意 component 拉起。
                 setDownloadListener { downloadUrl, _, _, _, _ ->
-                    if (isHttpUrl(downloadUrl)) {
-                        openInSystemBrowser(ctx, downloadUrl)
-                    } else {
-                        SnLog.i(NAV_LOG_TAG, "已忽略非 http(s) 下载链接：$downloadUrl")
+                    when {
+                        // 公告 PDF（老周 2026-10-04）：WebView 把 PDF 当「下载」处理时会走到这里 ——
+                        // 同样交给**内置阅读器**，不再丢给系统浏览器（那等于跳出 App）。
+                        isPdfUrl(downloadUrl) -> {
+                            SnLog.i(NAV_LOG_TAG, "PDF 下载链接改用内置阅读器：$downloadUrl")
+                            onPdf(downloadUrl)
+                        }
+                        isHttpUrl(downloadUrl) -> openInSystemBrowser(ctx, downloadUrl)
+                        else -> SnLog.i(NAV_LOG_TAG, "已忽略非 http(s) 下载链接：$downloadUrl")
                     }
                 }
             }

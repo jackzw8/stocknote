@@ -25,7 +25,7 @@ kotlin {
  *
  * ⚠️ jpackage 只接受 `major.minor.patch` 纯数字，**不能带后缀**（`-dbg` / `· 桌面版` 之类）。
  */
-val desktopVersion = "1.1.8"
+val desktopVersion = "1.1.10"
 
 /**
  * 把版本号生成成 Kotlin 常量（`:desktopApp` 的「关于」页与导出日志用）。
@@ -50,7 +50,7 @@ val generateBuildInfo by tasks.registering {
             |
             |/** 桌面壳的构建信息。 */
             |internal object DesktopBuildInfo {
-            |    /** 形如 "1.1.8" —— 与 androidApp / iosApp 的版本号同步维护（规范 §3）。 */
+            |    /** 形如 "1.1.10" —— 与 androidApp / iosApp 的版本号同步维护（规范 §3）。 */
             |    const val VERSION: String = "$desktopVersion"
             |}
             |

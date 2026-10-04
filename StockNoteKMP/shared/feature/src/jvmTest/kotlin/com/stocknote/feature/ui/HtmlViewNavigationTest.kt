@@ -58,6 +58,27 @@ class HtmlViewNavigationTest {
     }
 
     @Test
+    fun `PDF 链接可被识别_交给内置阅读器`() {
+        // 老周 2026-10-04：公告点「文件」跳到 PDF —— 白名单里的文件域会让它留在 WebView 里，
+        // 而 Android 的 WebView 渲染不了 PDF ⇒ 必须能把它认出来、改用内置阅读器。
+        assertTrue(
+            isPdfUrl("https://file.finance.qq.com/finance/hs/pdf/2026/08/15/1225475868.PDF"),
+            "腾讯公告 PDF（真机日志里的那条，扩展名大写）",
+        )
+        assertTrue(isPdfUrl("https://pdf.dfcfw.com/pdf/H2_AN2026_1.pdf"), "东财公告 PDF")
+        assertTrue(isPdfUrl("https://x.com/a/b.pdf?v=2#page=3"), "带 query / fragment 也算")
+        assertTrue(isPdfUrl("  HTTPS://X.COM/A/B.PDF  "), "大小写与前后空格都要吃掉")
+
+        // 非 PDF 绝不能误判（正文页 / 图片仍走 WebView）
+        assertFalse(isPdfUrl("https://gu.qq.com/resources/shy/news/detail-v2/index.html#/?id=nos1&s=b"))
+        assertFalse(isPdfUrl("https://pgdt.gtimg.cn/141/2026/x.jpg"))
+        assertFalse(isPdfUrl("https://x.com/a/pdf"))      // 只是路径里有 pdf 字样
+        assertFalse(isPdfUrl("https://x.com/a.pdfx"))
+        assertFalse(isPdfUrl("intent://x/#Intent;end"))   // 非 http(s) 不接管
+        assertFalse(isPdfUrl(""))
+    }
+
+    @Test
     fun `同一 URL 短时间内的重复导航会被去重`() {
         // 真机实测：同一次点击，导航回调被**重复触发 23 次**。不去重就会反复弹系统浏览器 + 刷爆日志。
         // ⚠️ 本用例依赖 1.5 秒的时间窗口，只断言"紧接着的重复被吞掉"，不睡等窗口过期（避免用例变慢/变飘）。
