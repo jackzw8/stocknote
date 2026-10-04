@@ -202,7 +202,7 @@ private fun HoldingsScreenContent(
 
         // ---- 持仓 TOP5（老周 2026-10-02：从统计页迁到本页；右侧「全部 ›」进持仓明细页）----
         // 筛选 / 排序 / 查询 / 完整明细列表都在「持仓明细」页（AppRoute.HoldingsDetail）。
-        if (snapshot != null && snapshot.positions.isNotEmpty()) {
+        if (snapshot != null && snapshot.positions.any { it.isOpen }) {
             item {
                 Sec(
                     title = "持仓 TOP5",
@@ -213,7 +213,10 @@ private fun HoldingsScreenContent(
                     CardBox {
                         // 按**市值**降序取前 5。市值口径 = 折算本位币（与「持仓市值 / 占总资产」一致；
                         // 港股/美股直接用原币市值比较会失真）。
+                        // 只取**仍持仓**的（老周 2026-10-04：已清仓归「持仓明细 → 已清仓」，
+                        // 否则持仓不足 5 只时会把清仓标的（市值 0）也排进来）。
                         snapshot.positions
+                            .filter { it.isOpen }
                             .sortedByDescending { snapshot.positionMarketValueInBase(it) }
                             .take(5)
                             .forEach { p -> HoldingRow(p, snapshot, onClick = { onOpenSecurity(p.securityId) }) }

@@ -5,6 +5,12 @@ package com.stocknote.feature
 import androidx.compose.ui.graphics.ImageBitmap
 import com.stocknote.data.platform.nativeLog
 import com.stocknote.feature.state.FileBridge
+// ⚠️ 这三个是**扩展函数**，必须显式 import（2026-10-04 CI 实测：漏了会报
+// `Unresolved reference 'toKString' / 'usePinned' / 'addressOf'` ——
+// `platform.posix.fopen(...)` 那种**顶层函数**可以全限定写，扩展不行）。
+import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.toKString
+import kotlinx.cinterop.usePinned
 
 /**
  * iOS 的**文件桥**（2026-10-03，老周真机报「导出日志失败：当前平台未接入系统文件选择器」）。

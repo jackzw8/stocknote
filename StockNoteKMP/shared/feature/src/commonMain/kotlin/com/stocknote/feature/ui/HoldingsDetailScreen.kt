@@ -16,11 +16,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,6 +29,7 @@ import com.stocknote.core.format.Format
 import com.stocknote.core.model.Market
 import com.stocknote.core.model.Position
 import com.stocknote.feature.state.AppUiState
+import com.stocknote.feature.state.HoldingsDetailFilterHolder
 import com.stocknote.feature.theme.StockNoteColors
 
 /**
@@ -42,14 +39,19 @@ import com.stocknote.feature.theme.StockNoteColors
  * 迁到本页，由「持仓 TOP5」右侧的「全部 ›」进入（二级页，不带底部导航）。
  *
  * 分页：每页 [PAGE_SIZE] 条。筛选 / 排序 / 搜索任一变化，自动回到第 1 页
- * （page 用 remember 的三个 key 承载，key 一变即重建为 0）。
+ * （页码与三个条件一起存在 [HoldingsDetailFilterHolder] 里，由 holder 的 setter 归零）。
  * 口径与原来完全一致：占比分母是本位币总资产、分子同经汇率折算。
+ *
+ * 筛选口径（老周 2026-10-04）：**全部 / 各市场只列仍持仓的标的**，已清仓单列一个
+ * 「已清仓」chip；ETF 与场外基金合并成一类「基金」；排序去掉了「成本 ↑」。
  */
 private const val PAGE_SIZE = 10
 
 @Composable
 private fun HoldingsDetailContent(
     state: AppUiState,
+    /** 筛选 / 排序 / 搜索 / 页码（老周 2026-10-04）：由 App 顶层持有，跨「看详情」路由保留 */
+    holder: HoldingsDetailFilterHolder,
     onOpenSecurity: (String) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -57,16 +59,18 @@ private fun HoldingsDetailContent(
     val snapshot = state.snapshot
     val positions = snapshot?.positions.orEmpty()
 
-    var filterIndex by remember { mutableIntStateOf(0) }
-    var sortIndex by remember { mutableIntStateOf(0) }
-    // 查询（原持仓页右上角 🔍 入口，2026-10-02 迁到本页）：按名称/代码过滤
-    var searchText by remember { mutableStateOf("") }
-    var searchVisible by remember { mutableStateOf(false) }
+    val filterIndex = holder.filterIndex
+    val sortIndex = holder.sortIndex
+    val searchText = holder.searchText
+    val searchVisible = holder.searchVisible
 
-    // 「基金」筛选只对**账内**基金有意义（勾了「不计入统计」的基金在持仓页的「账外备忘」区）
-    val filters = listOf("全部", "A股", "港股", "美股", "ETF", "基金")
-    // 「股息率 ↓」= 累计分红 ÷ 持仓成本（与持仓明细同一口径）
-    val sorts = listOf("市值 ↓", "盈亏 ↓", "盈亏 ↑", "成本 ↑", "股息率 ↓")
+    // 筛选（老周 2026-10-04）：
+    //  ①「全部」只列**仍持仓**的标的 —— 已清仓（数量归零）单列一个「已清仓」chip；
+    //  ② ETF 与场外基金**合并**成一类，就叫「基金」（原来拆成 ETF / 基金两个 chip）。
+    // ⚠️ 各市场 chip 同样只列仍持仓的，已清仓只在「已清仓」里出现（两类不重叠）。
+    val filters = listOf("全部", "A股", "港股", "美股", "基金", "已清仓")
+    // 「股息率 ↓」= 累计分红 ÷ 持仓成本（与持仓明细同一口径）；「成本 ↑」已去掉（老周 2026-10-04）
+    val sorts = listOf("市值 ↓", "盈亏 ↓", "盈亏 ↑", "股息率 ↓")
 
     val visible = remember(positions, filterIndex, sortIndex, searchText, snapshot) {
         // 股息率 = 累计分红 ÷ 持仓总成本（成本均价×数量，原币口径，同一标的内比较不失真）
@@ -74,13 +78,15 @@ private fun HoldingsDetailContent(
             val cost = p.avgCost * p.quantity
             return if (cost > 1e-9) p.dividendCash / cost else 0.0
         }
+        fun openByMarket(m: Market) = positions.filter { it.isOpen && it.market == m }
         val filtered = when (filters.getOrNull(filterIndex)) {
-            "A股" -> positions.filter { it.market == Market.A_SHARE }
-            "港股" -> positions.filter { it.market == Market.HK }
-            "美股" -> positions.filter { it.market == Market.US }
-            "ETF" -> positions.filter { it.market == Market.ETF }
-            "基金" -> positions.filter { it.market == Market.FUND }
-            else -> positions
+            "A股" -> openByMarket(Market.A_SHARE)
+            "港股" -> openByMarket(Market.HK)
+            "美股" -> openByMarket(Market.US)
+            // ETF 与场外基金合并为「基金」
+            "基金" -> positions.filter { it.isOpen && (it.market == Market.ETF || it.market == Market.FUND) }
+            "已清仓" -> positions.filter { !it.isOpen }
+            else -> positions.filter { it.isOpen }
         }
         val searched = if (searchText.isBlank()) filtered
         else filtered.filter {
@@ -89,20 +95,21 @@ private fun HoldingsDetailContent(
         when (sorts.getOrNull(sortIndex)) {
             "盈亏 ↓" -> searched.sortedByDescending { it.unrealizedPnl }
             "盈亏 ↑" -> searched.sortedBy { it.unrealizedPnl }
-            "成本 ↑" -> searched.sortedBy { it.avgCost }
             "股息率 ↓" -> searched.sortedByDescending { dividendYield(it) }
             else -> searched.sortedByDescending { it.marketValue }
         }
     }
 
+    // 是否处于「已清仓」视图：标题 / 空提示 / 右侧说明都据此调整
+    val closedView = filters.getOrNull(filterIndex) == "已清仓"
+
     val mvTotal = snapshot?.marketValueTotal ?: 0.0
 
     // ---- 分页：每页 10 条 ----
     val pageCount = maxOf(1, (visible.size + PAGE_SIZE - 1) / PAGE_SIZE)
-    // key = 筛选/排序/搜索：任一变化 → page 重建为 0（回到第 1 页）
-    var page by remember(filterIndex, sortIndex, searchText) { mutableIntStateOf(0) }
+    // page 由 holder 持有、跨路由保留；筛选/排序/搜索变化时 holder 的 setter 已把它归零（回第 1 页）。
     // 数据变少（如删了一笔）导致当前页越界时就地夹紧，不必额外 effect
-    val safePage = page.coerceIn(0, pageCount - 1)
+    val safePage = holder.page.coerceIn(0, pageCount - 1)
     val pageItems = visible.drop(safePage * PAGE_SIZE).take(PAGE_SIZE)
 
     LazyColumn(
@@ -133,10 +140,7 @@ private fun HoldingsDetailContent(
                         .size(34.dp)
                         .clip(RoundedCornerShape(11.dp))
                         .background(if (searchVisible) StockNoteColors.Brand else Color.White)
-                        .clickable {
-                            searchVisible = !searchVisible
-                            if (!searchVisible) searchText = ""
-                        },
+                        .clickable { holder.toggleSearch() },
                     contentAlignment = Alignment.Center,
                 ) {
                     Text("🔍", fontSize = pageSp(14f), modifier = Modifier.semantics { contentDescription = "搜索持仓" })
@@ -150,7 +154,7 @@ private fun HoldingsDetailContent(
                 LabeledField(
                     label = "搜索持仓",
                     value = searchText,
-                    onValueChange = { searchText = it },
+                    onValueChange = { holder.setSearch(it) },
                     placeholder = "名称或代码",
                     modifier = Modifier.padding(horizontal = 18.dp),
                 )
@@ -160,19 +164,20 @@ private fun HoldingsDetailContent(
         state.error?.let { item { ErrorBanner(message = it, onRetry = { }) } }
 
         // ---- 筛选 / 排序 ----
-        item { ChipStrip(filters, filterIndex) { filterIndex = it } }
-        item { ChipStrip(sorts, sortIndex, topPad = 8) { sortIndex = it } }
+        item { ChipStrip(filters, filterIndex) { holder.selectFilter(it) } }
+        item { ChipStrip(sorts, sortIndex, topPad = 8) { holder.selectSort(it) } }
 
         // ---- 持仓明细（当前页 10 条）----
         item {
             Sec(
-                title = "持仓明细（${visible.size}）",
-                more = "合计 ${Format.money(mvTotal)}",
+                title = if (closedView) "已清仓（${visible.size}）" else "持仓明细（${visible.size}）",
+                // 已清仓视图里「合计市值」没有意义（已清仓市值恒为 0），不显示
+                more = if (closedView) null else "合计 ${Format.money(mvTotal)}",
                 modifier = Modifier.padding(top = 16.dp),
             ) {
                 CardBox {
                     if (visible.isEmpty()) {
-                        EmptyHint("这个筛选下没有持仓。")
+                        EmptyHint(if (closedView) "还没有已清仓的标的。" else "这个筛选下没有持仓。")
                     } else {
                         pageItems.forEach { p -> HoldingRow(p, snapshot, onClick = { onOpenSecurity(p.securityId) }) }
                     }
@@ -183,7 +188,7 @@ private fun HoldingsDetailContent(
                         page = safePage,
                         pageCount = pageCount,
                         total = visible.size,
-                        onPage = { page = it },
+                        onPage = { holder.goToPage(it) },
                     )
                 }
             }
@@ -236,12 +241,14 @@ private fun PagerBar(page: Int, pageCount: Int, total: Int, onPage: (Int) -> Uni
 @Composable
 fun HoldingsDetailScreen(
     state: AppUiState,
+    /** 筛选 / 排序 / 搜索 / 页码 holder（老周 2026-10-04）：由 App 顶层持有，跨路由保留 */
+    holder: HoldingsDetailFilterHolder,
     onOpenSecurity: (String) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     androidx.compose.runtime.CompositionLocalProvider(LocalPageTextScale provides PAGE_TEXT_SCALE) {
-        HoldingsDetailContent(state, onOpenSecurity, onBack, modifier)
+        HoldingsDetailContent(state, holder, onOpenSecurity, onBack, modifier)
     }
 }
 
@@ -275,6 +282,24 @@ internal fun ChipStrip(options: List<String>, selected: Int, topPad: Int = 13, o
 
 @Composable
 internal fun HoldingRow(p: Position, snap: com.stocknote.core.model.PortfolioSnapshot?, onClick: () -> Unit) {
+    if (!p.isOpen) {
+        // 已清仓（老周 2026-10-04）：数量归零 → 市值 / 浮动盈亏 / 成本**全是 0**，
+        // 照原样渲染会是一行「0 / ¥0 / +0.0%」的废行。改为显示**已实现盈亏**（该标的平仓累计）。
+        val realized = p.realizedPnl
+        StockRow(
+            avatar = p.name.take(1),
+            name = p.name,
+            marketTag = p.market.label,
+            detail = "已清仓 · 累计 ${p.tradeCount} 笔交易",
+            priceText = "已清仓",
+            pnlText = "已实现 " + Format.moneySigned(realized, p.currency.symbol),
+            pnlPositive = realized >= 0,
+            market = p.market,
+            avatarTinted = realized < 0,
+            onClick = onClick,
+        )
+        return
+    }
     val ratio = p.marketPrice?.let { price -> if (p.avgCost > 0) (price - p.avgCost) / p.avgCost else null }
     // 占比分母是本位币总资产，分子同样要折算本位币（原币直接除会错配）
     val share = snap?.let { if (it.totalAsset > 0) snap.positionMarketValueInBase(p) / it.totalAsset else null }

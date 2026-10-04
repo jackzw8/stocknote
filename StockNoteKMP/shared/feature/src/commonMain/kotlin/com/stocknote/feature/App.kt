@@ -33,6 +33,7 @@ import com.stocknote.feature.state.PlanHolder
 import com.stocknote.feature.state.Screen
 import com.stocknote.feature.state.rememberAnalysisHolder
 import com.stocknote.feature.state.rememberAppStateHolder
+import com.stocknote.feature.state.rememberHoldingsDetailFilterHolder
 import com.stocknote.feature.state.rememberNewsHolder
 import com.stocknote.feature.state.rememberPlanEditHolder
 import com.stocknote.feature.state.rememberPlanHolder
@@ -134,6 +135,10 @@ fun App(
         // 时该分支组合被销毁、holder 连同 symbol 一起丢 → 返回时 holder 重建，
         // bootstrap() 又选回"自选第一只"，表现为「返回后标的换了、不是真正的上一页」。
         val newsHolder = rememberNewsHolder(container)
+
+        // 持仓明细页的筛选 / 排序 / 搜索 / 页码也提升到顶层（老周 2026-10-04）：
+        // 该页是二级路由，点某行看详情再返回时，页面组合会被重建 —— 状态放页面里就会丢。
+        val holdingsDetailHolder = rememberHoldingsDetailFilterHolder()
 
         // 设置类 holder 同样提升到顶层（老周 2026-09-22）：
         // 「设置 / 数据管理 / 汇率管理」现在是三个独立页面，共用同一份状态与加载逻辑。
@@ -520,6 +525,7 @@ is AppRoute.CashFlow -> {
                 Box(Modifier.fillMaxSize().background(StockNoteColors.Background)) {
                     HoldingsDetailScreen(
                         state = state,
+                        holder = holdingsDetailHolder,
                         onOpenSecurity = { AppNav.push(AppRoute.SecurityDetail(it)) },
                         onBack = { AppNav.pop() },
                     )
