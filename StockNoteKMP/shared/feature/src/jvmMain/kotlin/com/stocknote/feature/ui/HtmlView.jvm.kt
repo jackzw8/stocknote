@@ -139,23 +139,7 @@ private data class JfxState(val ready: Boolean, val error: String?)
  */
 @Composable
 actual fun HtmlView(url: String, modifier: Modifier) {
-    var state by remember { mutableStateOf(JfxState(JfxRuntime.ready, JfxRuntime.error)) }
-
-    LaunchedEffect(Unit) {
-        if (state.ready || state.error != null) return@LaunchedEffect
-        JfxRuntime.prewarm()
-        // 最多等 10s，超时按失败降级（宁可"打不开"也不能卡住界面）
-        var waited = 0
-        while (!JfxRuntime.ready && JfxRuntime.error == null && waited < 10_000) {
-            delay(120)
-            waited += 120
-            state = JfxState(JfxRuntime.ready, JfxRuntime.error)
-        }
-        if (!JfxRuntime.ready && JfxRuntime.error == null) {
-            JfxRuntime.log("JavaFX 等待超时（10s），降级为系统浏览器")
-            state = JfxState(false, "内置浏览器启动超时")
-        }
-    }
+    val state = rememberJfxState()
 
     when {
         state.ready -> {
@@ -183,6 +167,74 @@ actual fun HtmlView(url: String, modifier: Modifier) {
             Text("正在启动内置浏览器…", textAlign = TextAlign.Center)
         }
     }
+}
+
+/**
+ * 桌面端：内嵌**本地 HTML 字符串**（老周 2026-10-04，探索页「星际战机」小游戏）。
+ *
+ * 与 [HtmlView] 同一套 JavaFX 外壳（预热规则见 [JfxRuntime]，⚠️ **绝不在 EDT 构造 JFXPanel**），
+ * 区别只是内容用 `WebEngine.loadContent` 灌进去、不走网络。
+ *
+ * ⚠️ 桌面版**没有 Web Audio**：游戏里的 `new AudioContext()` 会失败并被它自己 try/catch 兜住
+ * ⇒ 桌面端是**静音**的，玩法一切正常（这是平台能力差异，不是缺陷）。
+ */
+@Composable
+actual fun LocalHtmlView(html: String, modifier: Modifier) {
+    val state = rememberJfxState()
+
+    when {
+        state.ready -> {
+            var hostError by remember { mutableStateOf<String?>(null) }
+            val host = remember { WebPanelHost { message -> hostError = message } }
+            val detail = hostError
+            if (detail != null) {
+                Box(modifier.padding(24.dp), contentAlignment = Alignment.Center) {
+                    Text("内置浏览器不可用：$detail", textAlign = TextAlign.Center)
+                }
+            } else {
+                SwingPanel(
+                    modifier = modifier,
+                    factory = { host.panel },
+                    update = { host.loadContent(html) },
+                )
+            }
+        }
+
+        else -> Box(modifier, contentAlignment = Alignment.Center) {
+            Text(
+                if (state.error != null) "内置浏览器不可用：${state.error}" else "正在启动内置浏览器…",
+                textAlign = TextAlign.Center,
+            )
+        }
+    }
+}
+
+/**
+ * JavaFX 就绪状态（[HtmlView] 与 [LocalHtmlView] 共用）。
+ *
+ * ⚠️ 抽出来是为了两处外壳的启动/超时逻辑**只有一份** —— 这段规则是 2026-09-30
+ * 「空白 + 界面卡死」事故的产物，不允许出现两份有细微差异的拷贝。
+ */
+@Composable
+private fun rememberJfxState(): JfxState {
+    var state by remember { mutableStateOf(JfxState(JfxRuntime.ready, JfxRuntime.error)) }
+
+    LaunchedEffect(Unit) {
+        if (state.ready || state.error != null) return@LaunchedEffect
+        JfxRuntime.prewarm()
+        // 最多等 10s，超时按失败降级（宁可"打不开"也不能卡住界面）
+        var waited = 0
+        while (!JfxRuntime.ready && JfxRuntime.error == null && waited < 10_000) {
+            delay(120)
+            waited += 120
+            state = JfxState(JfxRuntime.ready, JfxRuntime.error)
+        }
+        if (!JfxRuntime.ready && JfxRuntime.error == null) {
+            JfxRuntime.log("JavaFX 等待超时（10s），降级为系统浏览器")
+            state = JfxState(false, "内置浏览器启动超时")
+        }
+    }
+    return state
 }
 
 /**
@@ -224,6 +276,12 @@ private class WebPanelHost(
     /** JavaFX 线程还没就绪时先记下来，初始化完再加载。 */
     private var pendingUrl: String? = null
 
+    /** 同上，给 [loadContent] 用（本地 HTML 内容）。 */
+    private var pendingContent: String? = null
+
+    /** 最近一次灌进去的 HTML（`update` 每次重组都会调 [loadContent]，靠它避免反复重载）。 */
+    private var lastContent: String? = null
+
     init {
         Platform.runLater {
             runCatching {
@@ -244,6 +302,11 @@ private class WebPanelHost(
                     pendingUrl = null
                     webView.engine.load(url)
                 }
+                pendingContent?.let { html ->
+                    pendingContent = null
+                    lastContent = html
+                    webView.engine.loadContent(html)
+                }
             }.onFailure { e ->
                 JfxRuntime.log("WebView 初始化失败: $e")
                 onError("${e::class.simpleName}: ${e.message.orEmpty()}".trim())
@@ -261,5 +324,22 @@ private class WebPanelHost(
         if (current.location != url) {
             Platform.runLater { runCatching { current.load(url) } }
         }
+    }
+
+    /**
+     * 灌入**本地 HTML 内容**（[LocalHtmlView]）。
+     *
+     * ⚠️ 内容相同就直接返回：`SwingPanel.update` 每次重组都会调用，无脑重载会把页面
+     * 反复刷回初始状态（Android 侧同样的坑，见 `NewsWebView` 的 `view.url != url` 判断）。
+     */
+    fun loadContent(html: String) {
+        if (html == lastContent) return
+        val current = engine
+        if (current == null) {
+            pendingContent = html
+            return
+        }
+        lastContent = html
+        Platform.runLater { runCatching { current.loadContent(html) } }
     }
 }

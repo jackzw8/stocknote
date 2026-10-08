@@ -33,6 +33,7 @@ import com.stocknote.feature.state.PlanHolder
 import com.stocknote.feature.state.Screen
 import com.stocknote.feature.state.rememberAnalysisHolder
 import com.stocknote.feature.state.rememberAppStateHolder
+import com.stocknote.feature.state.rememberFlashNewsHolder
 import com.stocknote.feature.state.rememberHoldingsDetailFilterHolder
 import com.stocknote.feature.state.rememberNewsHolder
 import com.stocknote.feature.state.rememberPlanEditHolder
@@ -43,6 +44,7 @@ import com.stocknote.feature.theme.StockNoteColors
 import com.stocknote.feature.theme.StockNoteTheme
 import com.stocknote.feature.ui.ExploreScreen
 import com.stocknote.feature.ui.FinanceScreen
+import com.stocknote.feature.ui.FlashNewsScreen
 import com.stocknote.feature.ui.CninfoSyncScreen
 import com.stocknote.feature.ui.RiskScanScreen
 import com.stocknote.feature.ui.NewsDetailScreen
@@ -59,6 +61,7 @@ import com.stocknote.feature.ui.HoldingsDetailScreen
 import com.stocknote.feature.ui.HoldingsScreen
 import com.stocknote.feature.ui.PlanEditScreen
 import com.stocknote.feature.ui.PlanScreen
+import com.stocknote.feature.ui.PlaneShooterScreen
 import com.stocknote.feature.ui.ProtoTabBar
 import com.stocknote.feature.ui.PnlCalendarScreen
 import com.stocknote.feature.ui.ReviewFormScreen
@@ -139,6 +142,9 @@ fun App(
         // 持仓明细页的筛选 / 排序 / 搜索 / 页码也提升到顶层（老周 2026-10-04）：
         // 该页是二级路由，点某行看详情再返回时，页面组合会被重建 —— 状态放页面里就会丢。
         val holdingsDetailHolder = rememberHoldingsDetailFilterHolder()
+
+        // 7×24 快讯（老周 2026-10-04）：提升到顶层，返回探索页再进来时列表还在、不必重拉
+        val flashNewsHolder = rememberFlashNewsHolder(container)
 
         // 设置类 holder 同样提升到顶层（老周 2026-09-22）：
         // 「设置 / 数据管理 / 汇率管理」现在是三个独立页面，共用同一份状态与加载逻辑。
@@ -462,6 +468,19 @@ is AppRoute.CashFlow -> {
                 )
             }
 
+            // ---- 7×24 快讯（老周 2026-10-04）：探索 →「7×24 快讯」（财联社电报）----
+            is AppRoute.FlashNews -> {
+                FlashNewsScreen(
+                    holder = flashNewsHolder,
+                    onBack = { AppNav.pop() },
+                )
+            }
+
+            // ---- 星际战机（老周 2026-10-04）：探索 →「星际战机」（内嵌 H5 canvas 小游戏，离线）----
+            is AppRoute.PlaneShooter -> {
+                PlaneShooterScreen(onBack = { AppNav.pop() })
+            }
+
             // ---- 个股财务数据（老周 2026-09-24）：探索 →「个股财务」（东财 F10）----
             is AppRoute.Finance -> {
                 val financeHolder = remember {
@@ -670,6 +689,8 @@ private fun MainTabs(
                         onOpenNews = { AppNav.push(AppRoute.NewsList) },
                         onOpenFinance = { AppNav.push(AppRoute.Finance) },
                         onOpenRiskScan = { AppNav.push(AppRoute.RiskScan) },
+                        onOpenFlashNews = { AppNav.push(AppRoute.FlashNews) },
+                        onOpenGame = { AppNav.push(AppRoute.PlaneShooter) },
                     )
 
                     Screen.PLAN -> PlanScreen(

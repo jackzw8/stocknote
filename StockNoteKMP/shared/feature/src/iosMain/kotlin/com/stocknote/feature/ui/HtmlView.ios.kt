@@ -149,6 +149,36 @@ actual fun HtmlView(url: String, modifier: Modifier) {
 }
 
 /**
+ * iOS 端：内嵌**本地 HTML 字符串**（老周 2026-10-04，探索页「星际战机」小游戏）。
+ *
+ * `loadHTMLString` 把源码直接喂给 WKWebView，不经过网络；baseURL 给**非空**值，
+ * 页面才有正常 origin —— 否则 `localStorage`（游戏存最高分）拿不到、每次进来都从 0 开始。
+ *
+ * ⚠️ 与 [HtmlView] 一样用 `UIKitInteropProperties(NonCooperative)`：让 WKWebView 独占触摸。
+ * 默认的 Cooperative 会先把触摸交给 Compose 判定 150ms，游戏里"按住拖动操控战机"会明显发涩。
+ * `navigationDelegate` 这里**不需要**：内容全内联、没有任何导航。
+ */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+@Composable
+actual fun LocalHtmlView(html: String, modifier: Modifier) {
+    UIKitView(
+        factory = {
+            WKWebView().apply {
+                loadHTMLString(html, NSURL(string = LOCAL_HTML_BASE_URL))
+            }
+        },
+        modifier = modifier,
+        // html 是常量，加载一次即可
+        update = {},
+        onRelease = { webView -> webView.stopLoading() },
+        properties = UIKitInteropProperties(
+            interactionMode = UIKitInteropInteractionMode.NonCooperative,
+            isNativeAccessibilityEnabled = true,
+        ),
+    )
+}
+
+/**
  * WKWebView 的导航委托 —— 对应 Android 的 `WebViewClient.onPageFinished`
  * 与桌面版的 `loadWorker` 状态监听。
  *

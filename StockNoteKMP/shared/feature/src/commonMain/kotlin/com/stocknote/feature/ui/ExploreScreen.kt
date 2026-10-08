@@ -38,6 +38,10 @@ fun ExploreScreen(
     onOpenNews: () -> Unit,
     onOpenFinance: () -> Unit,
     onOpenRiskScan: () -> Unit,
+    /** 7×24 快讯（老周 2026-10-04）：财联社电报，市场级实时快讯 */
+    onOpenFlashNews: () -> Unit,
+    /** 星际战机（老周 2026-10-04）：内嵌的 H5 canvas 小游戏，纯娱乐、离线可玩 */
+    onOpenGame: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     CompositionLocalProvider(LocalPageTextScale provides PAGE_TEXT_SCALE) {
@@ -96,10 +100,35 @@ fun ExploreScreen(
                             subtitle = "按标的做风险体检",
                             onClick = onOpenRiskScan,
                         )
+                        Box(
+                            Modifier
+                                .padding(horizontal = 15.dp)
+                                .height(0.6.dp)
+                                .fillMaxWidth()
+                                .background(StockNoteColors.Divider),
+                        )
+                        ExploreEntry(
+                            icon = "⚡",
+                            title = "7×24 快讯",
+                            subtitle = "财联社电报 · 市场实时快讯",
+                            onClick = onOpenFlashNews,
+                        )
+                        Box(
+                            Modifier
+                                .padding(horizontal = 15.dp)
+                                .height(0.6.dp)
+                                .fillMaxWidth()
+                                .background(StockNoteColors.Divider),
+                        )
+                        ExploreEntry(
+                            icon = "🚀",
+                            title = "星际战机",
+                            subtitle = "太空射击小游戏 · 10 大关卡",
+                            onClick = onOpenGame,
+                        )
                     }
                 }
             }
-            item { ProtoFoot("资讯数据来自腾讯自选股") }
         }
     }
 }

@@ -24,19 +24,17 @@ android {
         applicationId = "com.stocknote.app"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        // 版本号由老周指定（2026-10-04：1.1.10 —— 相对 1.1.9 的内容：
-        // ① **个股资讯返回定位**：从资讯详情退回列表时定位到之前看的那一条
-        //    （滚动位置存 `NewsHolder`，列表页以其为初值 + onDispose 存回）；
-        // ② **盈亏日历选日明细**：各标的盈亏改按**净额从盈到亏**排序，并显示**该股当日涨跌幅**
-        //    （`EquityCurve.Point` 新增 `chgPctBySecurity` = (今收−昨收)/昨收）；
-        // ③ **持仓明细页**：全部/各市场只列仍持仓的、已清仓单列一个 chip（展示已实现盈亏），
-        //    ETF 与场外基金合并为「基金」，去掉「成本 ↑」排序，筛选/排序/搜索/页码**跨路由保留**；
-        // ④ **iOS 文件桥（导出方向）接通**并修掉编译；⑤ 真机日志回归修复
-        //    （导航白名单补腾讯/东财文件域、导航回调去重、日志加时间戳）。
+        // 版本号由老周指定（2026-10-04：1.1.11 —— 相对 1.1.10 的内容：
+        // ① **探索页新增「星际战机」小游戏**：内嵌离线 H5（canvas，10 关 + 剧情 + 母舰 Boss），
+        //    新增跨平台 `LocalHtmlView`（内嵌本地 HTML 字符串）承载；
+        // ② **去掉探索页底部那行说明文字**；
+        // ③ 修掉小游戏真机黑屏：`loadDataWithBaseURL` 内部拼 `data:` URL 会把文档在第一个 `#` 处
+        //    截断，且该页 `html/body/#stage` 的百分比高度链在 WebView 里算成 0
+        //    ⇒ Android 改成"真 URL + `shouldInterceptRequest` 就地应答"，另注入显式像素高度。
         //
-        // versionCode 必须单调递增（57 → 58 → 59 → 60），否则实机覆盖安装会失败
-        versionCode = 60
-        versionName = "1.1.10"
+        // versionCode 必须单调递增（58 → 59 → 60 → 61），否则实机覆盖安装会失败
+        versionCode = 61
+        versionName = "1.1.11"
 
         // 演示数据：**默认不播种**（老周 2026-09-17：debug 版也不要种子数据，
         // 以便真实复现「全新空账本」场景）。需要演示数据时用 -PseedDemo=true 构建。

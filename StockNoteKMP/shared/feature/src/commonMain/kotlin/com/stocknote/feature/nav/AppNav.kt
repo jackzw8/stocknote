@@ -93,6 +93,18 @@ sealed interface AppRoute {
     /** 个股财务数据（老周 2026-09-24）：探索页 →「个股财务」，数据来自东财 F10 */
     data object Finance : AppRoute
 
+    /**
+     * **7×24 快讯**（老周 2026-10-04）：探索页 →「7×24 快讯」。
+     * 数据来自**财联社电报**（非官方接口，`sign = MD5(SHA1(...))`，见 `FlashNewsSource`）。
+     */
+    data object FlashNews : AppRoute
+
+    /**
+     * **星际战机**（老周 2026-10-04）：探索页 →「星际战机」。
+     * 内嵌的 H5 canvas 小游戏（`PlaneShooterHtml`），**完全离线**、不联网。
+     */
+    data object PlaneShooter : AppRoute
+
     /** 个股风险扫雷（老周 2026-09-24）：探索页 →「个股扫雷」，规则见《东财F10个股风险扫雷技术方案》 */
     data object RiskScan : AppRoute
 }

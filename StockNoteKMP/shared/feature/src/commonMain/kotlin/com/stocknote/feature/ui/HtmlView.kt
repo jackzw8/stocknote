@@ -16,6 +16,25 @@ import com.stocknote.data.platform.nowEpochMs
 expect fun HtmlView(url: String, modifier: Modifier = Modifier)
 
 /**
+ * **内嵌本地 HTML 内容**（老周 2026-10-04）：把一段 HTML 字符串直接交给平台 WebView 渲染，
+ * 不经过网络 —— 首次用于探索页的「星际战机」小游戏（`PlaneShooterHtml`）。
+ *
+ * 与 [HtmlView] 的区别只在**内容从哪来**：
+ *  - [HtmlView] 给的是 **URL**（资讯正文，远程页面）；
+ *  - 本方法是 **HTML 源码**（本地字符串），三端分别走：
+ *    Android：**假装一个 https 真 URL + `shouldInterceptRequest` 就地应答**
+ *   （⚠️ 不能用 `loadDataWithBaseURL` —— 它内部拼 `data:` URL，页面里的 `#` 会被当 fragment
+ *    截断、整页空白，2026-10-04 真机踩过）；
+ *    iOS `loadHTMLString` / 桌面 `WebEngine.loadContent`。
+ *
+ * ⚠️ 一律要**正常 origin**（[LOCAL_HTML_BASE_URL]）：不透明源（`data:` / 裸 `loadData`）
+ * 下 `localStorage` 会抛异常，游戏的最高分就存不下来。
+ * 这条路只有内联资源，**不发任何网络请求**。
+ */
+@Composable
+expect fun LocalHtmlView(html: String, modifier: Modifier = Modifier)
+
+/**
  * 「用系统浏览器打开」动作（老周 2026-09-24）。
  *
  * 为什么需要它：资讯详情是内嵌网页，但**有些操作在 WebView 里做不了** ——
@@ -69,6 +88,18 @@ private val LocalOnlySchemes = listOf("about:", "data:", "blob:", "javascript:")
  * 「设置 → 数据管理 → 导出运行日志」里按 `NAV` 搜就能看到拦了什么、外放了什么。
  */
 internal const val NAV_LOG_TAG = "NAV"
+
+/**
+ * 内嵌小游戏（「星际战机」）的日志标签 —— 三端共用一个，排查时按 `GAME` 搜运行日志。
+ */
+internal const val GAME_LOG_TAG = "GAME"
+
+/**
+ * [LocalHtmlView] 用的 **baseUrl**（三端共用），只为把页面放进一个**正常 origin**：
+ * `null` 会让页面处于不透明源，`localStorage`（游戏存最高分）直接抛异常。
+ * ⚠️ 内容全是内联的，这个域**不会**被真正访问。
+ */
+internal const val LOCAL_HTML_BASE_URL = "https://stocknote.local/"
 
 /**
  * 该**导航**是否允许留在内嵌页里（规则见 [InAppNavigationHosts]）。

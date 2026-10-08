@@ -528,6 +528,33 @@ class QuoteClient(
         NewsSource.parse(text)
     }.getOrDefault(NewsSource.Page(emptyList(), 0, 0))
 
+    /**
+     * 拉**财联社 7×24 快讯**（老周 2026-10-04，依据《财联社 7x24 快讯接口技术文档 v1.0》）。
+     *
+     * 签名与字段说明见 [FlashNewsSource]（**sign = MD5(SHA1(参数字典序拼接))**）。
+     * ⚠️ 必须带**浏览器 UA + `Referer: https://www.cls.cn/telegraph`**，否则接口 404 / 报签名错误。
+     * ⚠️ `rn` 由 [FlashNewsSource.safeRn] **夹到 1..50** —— 实测 51 起接口返回空列表且 `errno=0`
+     *（静默失败，页面上看就是"突然没有快讯"）。
+     *
+     * @param rn 每批条数（接口参数名是 `rn`）；"加载更多"就是把它加大再重取（不是游标翻页，
+     *           原因见 [FlashNewsSource] 类注释）
+     * @return 一页快讯；**网络失败 / 接口报错返回 null**（调用方据此显示「加载失败 + 重试」，
+     *         与"接口正常但没数据"的空页区分开 —— 这是 P1-35「别静默失败」的同一条原则）
+     */
+    suspend fun fetchFlashNews(rn: Int = FlashNewsSource.DEFAULT_RN): FlashNewsSource.Page? {
+        val params = FlashNewsSource.params(rn)
+        return runCatching {
+            val text: String = http.get(FLASH_NEWS_ENDPOINT) {
+                header("User-Agent", FlashNewsSource.USER_AGENT)
+                header("Referer", FlashNewsSource.REFERER)
+                header("Accept", "application/json, text/plain, */*")
+                params.forEach { (k, v) -> parameter(k, v) }
+                parameter("sign", FlashNewsSource.sign(params))
+            }.bodyAsText()
+            FlashNewsSource.parse(text)
+        }.getOrElse { null }
+    }
+
     // ---------------------------------------------------------------- F10 财务数据（老周 2026-09-24）
 
     /**
@@ -1051,6 +1078,12 @@ class QuoteClient(
          * 参数：type(0公告/1研报/2资讯) + symbol + page + n；Headers 需带 UA 与 Referer。
          */
         const val NEWS_ENDPOINT = "https://proxy.finance.qq.com/ifzqgtimg/appstock/news/info/search"
+
+        /**
+         * 财联社 **7×24 快讯**（老周 2026-10-04，依据《财联社 7x24 快讯接口技术文档 v1.0》）。
+         * 需要 `sign`（MD5∘SHA1）与 Referer，见 [FlashNewsSource]。
+         */
+        const val FLASH_NEWS_ENDPOINT = "https://www.cls.cn/v1/roll/get_roll_list"
 
         /** 东财 F10 —— A股：老网关 + `type` + `sty`（《东方财富F10接口技术文档》§3.2）。 */
         const val A_F10_ENDPOINT = "https://datacenter.eastmoney.com/securities/api/data/get"

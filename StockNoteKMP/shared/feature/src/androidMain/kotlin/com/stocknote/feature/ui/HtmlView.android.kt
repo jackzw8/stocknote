@@ -7,6 +7,7 @@ import android.net.Uri
 import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.Box
@@ -56,6 +57,125 @@ actual fun HtmlView(url: String, modifier: Modifier) {
             )
         }
     }
+}
+
+/**
+ * 本地 HTML 用的**真 URL**。只作内容标识：请求由 [LocalHtmlView] 的拦截器**就地应答**，
+ * **不会**真的走网络（本机没有这个域）。
+ */
+private const val LOCAL_HTML_URL = LOCAL_HTML_BASE_URL + "local-html.html"
+
+/**
+ * Android 端：内嵌**本地 HTML 字符串**（老周 2026-10-04，探索页「星际战机」小游戏）。
+ *
+ * ## ⚠️ 为什么**不能**用 `loadDataWithBaseURL`（真机踩坑，2026-10-04）
+ * 首版就是用它，结果真机打开**一片黑**（只剩我们自己的底色）：该 API 内部是把内容
+ * **拼成一个 `data:` URL** 再交给内核，于是 HTML 里的 `#` 会被当成 URL 的 **fragment** ——
+ * 本页第一个 `#` 在第 6 行 `<meta name="theme-color" content="#05070f">`，
+ * 文档**在那里就被截断**，只剩半个 `<head>`、没有 body，自然什么都不渲染。
+ * （`loadData` 同样如此，所以它才要求调用方自己先做 URL 编码。）
+ *
+ * ## 现在的做法：给它一个**真 URL**，由 `shouldInterceptRequest` 就地回内容
+ * 让 WebView 加载 `https://stocknote.local/local-html.html`，在拦截回调里用内存中的 HTML 应答。
+ * 好处：
+ *  1. **完全不经过 URL 编码** ⇒ 任何字符（`#` / `%` / `&` / 中文）都原样送达；
+ *  2. 页面拿到**正常 https origin** ⇒ 游戏存最高分的 `localStorage` 才可用
+ *     （`data:` 或裸 `loadData` 是不透明源，访问会抛异常）；
+ *  3. 与官方 `WebViewAssetLoader` 同一套路，只是内容来自字符串而不是 assets。
+ *
+ * ## ⚠️ 第二个坑：页面自己的**百分比高度链会算成 0**
+ * 加载成功、DOM 完整、尺寸也对，屏幕仍可能一片空白 —— 那是页面侧的坑：本页
+ * `html,body{height:100%} → #stage{height:100%}` 在 WebView 里解析成 0，连 `100vh` 也量到 0px
+ * （而 `documentElement.clientHeight` 是正常的），于是 `#stage{overflow:hidden}` 把子元素全剪掉。
+ * 解法是给**显式像素高度**，见 `PlaneShooterScreen` 的 `ViewportFitJs`。
+ * **排查手法（别靠截图猜）**：`evaluateJavascript` 量 `documentElement.clientHeight` /
+ * `body.clientHeight` / `#stage` 的 rect 与 `getComputedStyle().height`，一眼就能看出来。
+ *
+ * ⚠️ 加载放在 `update`（**挂载之后**）而不是 `factory`：与资讯正文那条已跑通的路保持一致 ——
+ * 视图还没 attach 就发起加载，行为没有保证。
+ * ⚠️ `html` 是常量（`PlaneShooterHtml`）时加载一次即可：靠 `view.url` 比对避免每次重组重刷。
+ */
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+actual fun LocalHtmlView(html: String, modifier: Modifier) {
+    AndroidView(
+        modifier = modifier,
+        factory = { ctx ->
+            WebView(ctx).apply {
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.useWideViewPort = true
+                settings.loadWithOverviewMode = true
+                settings.allowFileAccess = false
+                settings.allowContentAccess = false
+                settings.allowUniversalAccessFromFileURLs = false
+                // 游戏音效在 pointerdown / 点「开始远征」时建 AudioContext（已是用户手势），
+                // 这里再放开一道，避免个别机型把手势判定得过严而整局无声。
+                settings.mediaPlaybackRequiresUserGesture = false
+                // 只为把页面的 console 打进运行日志（排查用），不接管行为
+                webChromeClient = object : WebChromeClient() {
+                    override fun onConsoleMessage(m: ConsoleMessage): Boolean {
+                        SnLog.i(GAME_LOG_TAG, m.message())
+                        return true
+                    }
+                }
+                webViewClient = object : WebViewClient() {
+                    /**
+                     * 主文档请求就地应答（见本函数的说明）。
+                     *
+                     * ⚠️ 这个回调在 WebView 的 **IO 线程**上执行 —— 这里只读捕获的常量、返回内存流，
+                     * 不碰任何 UI；其余请求（favicon 之类）返回 null 交回 WebView 自己处理。
+                     */
+                    override fun shouldInterceptRequest(
+                        view: WebView,
+                        request: WebResourceRequest,
+                    ): WebResourceResponse? {
+                        if (request.url.toString() != LOCAL_HTML_URL) return null
+                        return WebResourceResponse(
+                            "text/html",
+                            "utf-8",
+                            java.io.ByteArrayInputStream(html.toByteArray(Charsets.UTF_8)),
+                        )
+                    }
+
+                    // 加载生命周期只记运行日志（与资讯正文页的 [SN_CLEAN] 一个套路）：
+                    // 「黑屏 / 白屏」这类问题，第一步就是确认页面到底有没有加载、有没有报错。
+                    override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                        super.onPageStarted(view, url, favicon)
+                        SnLog.i(GAME_LOG_TAG, "onPageStarted url=$url")
+                    }
+
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        super.onPageFinished(view, url)
+                        SnLog.i(GAME_LOG_TAG, "onPageFinished url=$url")
+                    }
+
+                    override fun onReceivedError(
+                        view: WebView,
+                        request: WebResourceRequest,
+                        error: android.webkit.WebResourceError,
+                    ) {
+                        super.onReceivedError(view, request, error)
+                        // 只记**主文档**：子资源（favicon 之类）本来就不存在、必然报错，记了只会刷屏
+                        if (request.isForMainFrame) {
+                            SnLog.i(
+                                GAME_LOG_TAG,
+                                "onReceivedError ${request.url} code=${error.errorCode} ${error.description}",
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        update = { view ->
+            if (view.url != LOCAL_HTML_URL) view.loadUrl(LOCAL_HTML_URL)
+        },
+        onRelease = { view ->
+            view.removeCallbacks(null)
+            view.stopLoading()
+            view.destroy()
+        },
+    )
 }
 
 /**
