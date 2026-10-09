@@ -26,13 +26,21 @@ import kotlinx.coroutines.withContext
  *  2. [removeFactor]：先删 judgement 再删 factor（**无外键，级联全靠手写**）——
  *     漏了就是孤儿行（正好是 P2-28 想做的护栏类型）。
  *
- * ⚠️ 线程一律 `Dispatchers.IO.limitedParallelism(1)`：**不沿用**历史那批
- * `Dispatchers.Default`（P2-24 待办的历史包袱），新代码直接写对。
+ * ⚠️ 线程一律**单线程**（`limitedParallelism(1)`）：与 DB 写串行，避免并发交叉。
+ *
+ * ⚠️⚠️ 但**不能用 `Dispatchers.IO`** —— 它在 K/N 的 `commonMain` 里**访问不到**
+ *（2026-10-09 iOS CI 实测：`Cannot access 'val IO: CoroutineDispatcher':
+ *  it is internal in 'kotlinx.coroutines.Dispatchers'`；`IO` 只在 JVM/Android 与
+ *  iOS 各自的平台源集里声明，commonMain 看不到它）。
+ *  要真用 IO 得走 expect/actual，属 **P2-24** 的范围；这里用 `Default` + `limitedParallelism(1)`，
+ *  「DB 操作串行」这个**功能点完全一样**。
+ *  ⚠️ 这个坑**本地拦不住**（JVM 有 `IO`、Android 编得过），只有 iOS 目标才会报 ——
+ *  已给 `CommonMainPlatformLeakTest` 加规则，下次在 `jvmTest`（秒级）就会红。
  */
 class SkyEarthRepository internal constructor(
     private val db: StockNoteDb,
-    /** 测试可注入；默认单线程 IO（与 DB 写串行，避免并发交叉）。 */
-    private val io: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(1),
+    /** 测试可注入；默认单线程（与 DB 写串行，避免并发交叉）。 */
+    private val io: CoroutineDispatcher = Dispatchers.Default.limitedParallelism(1),
 ) {
 
     // ---- 清单 ----

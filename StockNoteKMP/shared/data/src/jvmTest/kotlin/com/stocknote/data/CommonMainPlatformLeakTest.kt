@@ -57,6 +57,12 @@ class CommonMainPlatformLeakTest {
             Regex("""(?<![\w.])(SimpleDateFormat|NumberFormat)\b"""),
         "String.valueOf → 直接用 .toString() / 模板串" to
             Regex("""String\.valueOf\s*\("""),
+        // ⭐ 2026-10-09 的新同类：`SkyEarthRepository` 写了 `Dispatchers.IO.limitedParallelism(1)`，
+        // 本地（JVM/Android）编得过，只有 iOS 目标报
+        // `Cannot access 'val IO: CoroutineDispatcher': it is internal in 'kotlinx.coroutines.Dispatchers'`
+        // —— 又是一次「本地全绿、只有 CI 才炸」。
+        "Dispatchers.IO → K/N 的 commonMain 看不到它（只在平台源集里）；单线程用 Dispatchers.Default.limitedParallelism(1)，真 IO 走 expect/actual" to
+            Regex("""Dispatchers\.IO\b|kotlinx\.coroutines\.IO\b"""),
     )
 
     @Test
