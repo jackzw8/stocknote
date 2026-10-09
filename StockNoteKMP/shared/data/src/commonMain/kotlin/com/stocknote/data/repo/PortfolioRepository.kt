@@ -621,7 +621,29 @@ class PortfolioRepository(
      * ⚠️ 各标的的当日盈亏**不在这里返回** —— 它在 `EquityCurve.Point.pnlBySecurity`
      * （曲线上已经算好并缓存，重算只会带来两处口径漂移的风险）。
      */
-    suspend fun dayDetail(date: String): DayDetail = withContext(Dispatchers.Default) {
+    suspend fun dayDetail(date: String): DayDetail = detailMatching(date) { it == date }
+
+    /**
+     * **某一个月的明细流水**（老周 2026-10-08：盈亏日历「当月明细」也要带上当月流水汇总）。
+     *
+     * 与 [dayDetail] 是**同一套口径**：同样那三张表、同样"只取计入统计的标的"、金额同样是本位币；
+     * 差别只有日期判断 —— 单日是「等于某天」，单月是「属于某月」。
+     * 所以两者抽成同一个私有实现 [detailMatching]，**避免两份过滤逻辑日后各自漂移**。
+     *
+     * @param month `yyyy-MM`
+     */
+    suspend fun monthDetail(month: String): DayDetail = detailMatching(month) { it.startsWith(month) }
+
+    /**
+     * [dayDetail] / [monthDetail] 的**共用实现**。
+     *
+     * @param key 回填进 [DayDetail.date]（单日是 `yyyy-MM-dd`，单月是 `yyyy-MM`）
+     * @param inRange 某个日期是否命中（单日比相等、单月比前缀）
+     */
+    private suspend fun detailMatching(
+        key: String,
+        inRange: (String) -> Boolean,
+    ): DayDetail = withContext(Dispatchers.Default) {
         val curveSecIds = db.securityQueries.selectAll().executeAsList()
             .filter { it.exclude_from_stats == 0L }
             .map { it.id }
@@ -629,11 +651,11 @@ class PortfolioRepository(
 
         val trades = db.tradeQueries.selectAll().executeAsList()
             .map { it.toDomain() }
-            .filter { it.tradeDate == date && it.securityId in curveSecIds }
+            .filter { inRange(it.tradeDate) && it.securityId in curveSecIds }
 
         // 出入金：读**原始行**（保留原币金额/币种/备注，UI 才能显示「入金 19,000 HKD」）
         val cashFlows = db.cashFlowQueries.selectAll().executeAsList()
-            .filter { it.flow_date == date }
+            .filter { inRange(it.flow_date) }
             .map {
                 DayCashFlow(
                     amountOrig = it.amount_orig,
@@ -646,7 +668,7 @@ class PortfolioRepository(
 
         // 分红：CASH 才折算金额；BONUS/RIGHTS 是股数变动（金额记 0，靠股数文案表达）
         val dividends = db.dividendQueries.selectAll().executeAsList()
-            .filter { it.ex_date == date && it.security_id in curveSecIds }
+            .filter { inRange(it.ex_date) && it.security_id in curveSecIds }
             .map {
                 DayDividend(
                     securityId = it.security_id,
@@ -661,7 +683,7 @@ class PortfolioRepository(
                 )
             }
 
-        DayDetail(date = date, trades = trades, cashFlows = cashFlows, dividends = dividends)
+        DayDetail(date = key, trades = trades, cashFlows = cashFlows, dividends = dividends)
     }
 
     // ------------------------------------------------- 加密备份恢复（REQ-SEC-03）

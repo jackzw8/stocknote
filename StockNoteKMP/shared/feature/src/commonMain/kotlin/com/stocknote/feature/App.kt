@@ -50,7 +50,7 @@ import com.stocknote.feature.ui.RiskScanScreen
 import com.stocknote.feature.ui.NewsDetailScreen
 import com.stocknote.feature.ui.NewsListScreen
 import com.stocknote.feature.ui.AboutScreen
-import com.stocknote.feature.ui.AnalysisScreen
+import com.stocknote.feature.ui.AnalysisChartScreen
 import com.stocknote.feature.ui.CashFlowScreen
 import com.stocknote.feature.ui.DataManageScreen
 import com.stocknote.feature.ui.DiaryScreen
@@ -68,6 +68,9 @@ import com.stocknote.feature.ui.ReviewFormScreen
 import com.stocknote.feature.ui.ReturnAnalysisScreen
 import com.stocknote.feature.ui.SecurityDetailScreen
 import com.stocknote.feature.ui.SettingsScreen
+import com.stocknote.feature.ui.SkyEarthScreen
+import com.stocknote.feature.ui.SkyFactorDetailScreen
+import com.stocknote.feature.ui.SkySeedImportScreen
 import com.stocknote.feature.ui.StatisticScreen
 import com.stocknote.feature.ui.TagManageScreen
 import com.stocknote.feature.ui.TradeFormScreen
@@ -146,6 +149,10 @@ fun App(
         // 7×24 快讯（老周 2026-10-04）：提升到顶层，返回探索页再进来时列表还在、不必重拉
         val flashNewsHolder = rememberFlashNewsHolder(container)
 
+        // 看天看地（老周 2026-10-09）：同样提升到顶层 —— 进种子导入页 / 关注点详情再返回时，
+        // 清单、分数与编辑状态不能丢（NewsHolder 当年就是在页面分支里 remember 踩的坑）。
+        val skyEarthHolder = com.stocknote.feature.state.rememberSkyEarthHolder(container)
+
         // 设置类 holder 同样提升到顶层（老周 2026-09-22）：
         // 「设置 / 数据管理 / 汇率管理」现在是三个独立页面，共用同一份状态与加载逻辑。
         val settingsHolder = rememberSettingsHolder(container.portfolio, container.settings, container.plan, container.csv, container.trade, container.backup)
@@ -178,24 +185,26 @@ fun App(
         val top = navStack.lastOrNull()
 
         // ---- 资产曲线（组合总资产）+ 沪深300 基准 ----
-        // 老周 2026-09-19：「图表中心」整页作废，资产曲线迁到分析页**第一个栏位**。
-        // 仅当分析页可见时才拉取，避免无谓网络请求；曲线走 holder 缓存（equityCurveCached），
+        // 老周 2026-09-19：「图表中心」整页作废，曲线迁进页面；
+        // 老周 2026-10-08：再从分析页**迁到「持仓」页顶部**（分析页改作「看天看地」），
+        // 所以拉取门控跟着改成「持仓页可见」。
+        // 仅当该页可见时才拉取，避免无谓网络请求；曲线走 holder 缓存（equityCurveCached），
         // 与统计页回撤/热力图/收益分析共用同一次拉取。
-        val analysisVisible = when (top) {
-            null -> state.screen == Screen.ANALYSIS
-            is AppRoute.Tabs -> top.screen == Screen.ANALYSIS
+        val equityCardVisible = when (top) {
+            null -> state.screen == Screen.HOLDINGS
+            is AppRoute.Tabs -> top.screen == Screen.HOLDINGS
             else -> false
         }
         var equityCurveResult by remember {
             mutableStateOf<com.stocknote.data.repo.PortfolioRepository.EquityCurveResult?>(null)
         }
         var benchSeries by remember { mutableStateOf<List<Pair<String, Double>>?>(null) }
-        LaunchedEffect(analysisVisible, dataVersion) {
-            if (!analysisVisible) return@LaunchedEffect
+        LaunchedEffect(equityCardVisible, dataVersion) {
+            if (!equityCardVisible) return@LaunchedEffect
             equityCurveResult = runCatching { container.portfolio.equityCurveCached() }.getOrNull()
             benchSeries = runCatching {
                 // 与收益率分析页同一份基准数据，同样加自动重试（老周 2026-09-24）：
-                // 偶发失败会让分析页的沪深300对比线整条消失，且不重试就一直是空的
+                // 偶发失败会让资产曲线的沪深300对比线整条消失，且不重试就一直是空的
                 var rows = emptyList<com.stocknote.data.net.QuoteClient.Candle>()
                 for (attempt in 0 until 3) {
                     rows = runCatching { container.quoteClient.fetchClosesWithDates("sh000300", 400) }
@@ -355,6 +364,8 @@ is AppRoute.CashFlow -> {
                         securityNames = state.equitySecurityNames,
                         // 点某天时按需查当天流水（交易/出入金/分红）—— 不在打开页面就全表查一遍
                         loadDayDetail = { date -> container.portfolio.dayDetail(date) },
+                        // 没选中某天时的「当月明细」要带当月流水汇总（老周 2026-10-08），同样按需查
+                        loadMonthDetail = { month -> container.portfolio.monthDetail(month) },
                     )
                 }
             }
@@ -481,6 +492,35 @@ is AppRoute.CashFlow -> {
                 PlaneShooterScreen(onBack = { AppNav.pop() })
             }
 
+            // ---- 分析图表（老周 2026-10-08）：统计分析页「📊 分析图表」→ 绩效类四块（二级页）----
+            is AppRoute.AnalysisChart -> {
+                AnalysisChartScreen(
+                    holder = rememberAnalysisHolder(container.portfolio, container.cash),
+                    refreshKey = dataVersion,
+                    onBack = { AppNav.pop() },
+                )
+            }
+
+            // ---- 看天看地 · 种子导入（老周 2026-10-09）：复制提示词 → 粘贴 → 预览 → 导入 ----
+            is AppRoute.SkySeedImport -> {
+                SkySeedImportScreen(
+                    holder = skyEarthHolder,
+                    initialDomain = route.domain,
+                    onBack = { AppNav.pop() },
+                )
+            }
+
+            // ---- 看天看地 · 关注点详情（老周 2026-10-09）：判断阶梯线 × 同期基准走势 ----
+            is AppRoute.SkyFactorDetail -> {
+                SkyFactorDetailScreen(
+                    holder = skyEarthHolder,
+                    factorId = route.factorId,
+                    repo = container.skyEarth,
+                    quoteClient = container.quoteClient,
+                    onBack = { AppNav.pop() },
+                )
+            }
+
             // ---- 个股财务数据（老周 2026-09-24）：探索 →「个股财务」（东财 F10）----
             is AppRoute.Finance -> {
                 val financeHolder = remember {
@@ -556,6 +596,7 @@ is AppRoute.CashFlow -> {
                 holder = holder,
                 container = container,
                 planHolder = planHolder,
+                skyEarthHolder = skyEarthHolder,
                 dataVersion = dataVersion,
                 equityCurveResult = equityCurveResult,
                 benchSeries = benchSeries,
@@ -573,6 +614,7 @@ is AppRoute.CashFlow -> {
                 holder = holder,
                 container = container,
                 planHolder = planHolder,
+                skyEarthHolder = skyEarthHolder,
                 dataVersion = dataVersion,
                 equityCurveResult = equityCurveResult,
                 benchSeries = benchSeries,
@@ -585,7 +627,7 @@ is AppRoute.CashFlow -> {
 }
 
 /**
- * 四个主页面（交易统计 / 我的持仓 / 交易计划 / 分析图表）——**左右滑动切换**（老周 2026-09-21）。
+ * 五个主页面（统计分析 / 我的持仓 / 探索 / 交易计划 / 看天看地）——**左右滑动切换**（老周 2026-09-21）。
  *
  * 用 [HorizontalPager] 承载，底部 tab 与滑动**双向同步**：
  *  - 滑动落定 → `holder.select(该页)`；
@@ -601,6 +643,8 @@ private fun MainTabs(
     holder: com.stocknote.feature.state.AppStateHolder,
     container: AppContainer,
     planHolder: PlanHolder,
+    /** 看天看地 holder（App 顶层 remember，见 skyEarthHolder 的说明）。 */
+    skyEarthHolder: com.stocknote.feature.state.SkyEarthHolder,
     dataVersion: Int,
     equityCurveResult: com.stocknote.data.repo.PortfolioRepository.EquityCurveResult?,
     benchSeries: List<Pair<String, Double>>?,
@@ -669,7 +713,6 @@ private fun MainTabs(
                         onRefreshAll = { holder.refreshAll() },
                         onDismissRefreshMessage = { holder.dismissRefreshMessage() },
                         onOpenSecurity = { AppNav.push(AppRoute.SecurityDetail(it)) },
-                        onSwitchTab = { holder.select(it) },
                         // 👁 切换全局「隐藏盈亏」（老周 2026-09-30）：
                         // 先改内存态（App 根部据此设置 Format.privacyMasked → **同一帧**全部页面变遮罩），
                         // 再落库（重启后仍是隐私态）。设置页里的开关走 SettingsHolder，两边最终一致。
@@ -680,9 +723,12 @@ private fun MainTabs(
                         },
                     )
 
+                    // 资产曲线卡在**本页顶部**（老周 2026-10-08 从分析页迁来）
                     Screen.HOLDINGS -> HoldingsScreen(
                         state = state,
                         onOpenSecurity = { AppNav.push(AppRoute.SecurityDetail(it)) },
+                        equityCurve = equityCurveResult,
+                        benchmark = benchSeries,
                     )
 
                     Screen.EXPLORE -> ExploreScreen(
@@ -700,11 +746,11 @@ private fun MainTabs(
                         onEditPlan = { id -> AppNav.push(AppRoute.PlanForm(id)) },
                     )
 
-                    Screen.ANALYSIS -> AnalysisScreen(
-                        holder = rememberAnalysisHolder(container.portfolio, container.cash),
-                        refreshKey = dataVersion,
-                        equityCurve = equityCurveResult,
-                        benchmark = benchSeries,
+                    // 看天看地（老周 2026-10-09，SE-5）：主页面 + 两个二级页（种子导入 / 关注点详情）
+                    Screen.ANALYSIS -> SkyEarthScreen(
+                        holder = skyEarthHolder,
+                        onOpenDetail = { id -> AppNav.push(AppRoute.SkyFactorDetail(id)) },
+                        onOpenImport = { domain -> AppNav.push(AppRoute.SkySeedImport(domain)) },
                     )
                 }
             }

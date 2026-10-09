@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -64,6 +65,11 @@ fun PnlCalendarScreen(
      * null = 不提供该能力（明细里就只显示「各标的盈亏」那一段）。
      */
     loadDayDetail: (suspend (String) -> com.stocknote.data.repo.PortfolioRepository.DayDetail)? = null,
+    /**
+     * 按需加载**某个月**的流水（老周 2026-10-08）—— 「当月明细」里的**流水汇总**用它。
+     * 入参是 `yyyy-MM`。null = 当月明细里就不显示流水汇总那一段。
+     */
+    loadMonthDetail: (suspend (String) -> com.stocknote.data.repo.PortfolioRepository.DayDetail)? = null,
     modifier: Modifier = Modifier,
 ) {
     // 逐日盈亏：date -> delta（**已剔除出入金**）
@@ -71,9 +77,20 @@ fun PnlCalendarScreen(
         com.stocknote.core.calc.EquityCurve.dailyPnl(points, cashFlowsByDate)
     }
 
+    // 可选月份列表（从数据里取，升序）—— ⚠️ 必须排在「选中某天」**之前**：
+    // 下面 `selectedDate` 的 remember key 要用到 `month`。
+    val months = remember(dailyPnl) {
+        dailyPnl.keys.map { it.take(7) }.distinct().sorted()
+    }
+    var monthIndex by remember(months) { mutableStateOf(months.lastIndex.coerceAtLeast(0)) }
+    val month = months.getOrNull(monthIndex).orEmpty()
+
     // ---- 选中某天 → 在日历下方展开明细（老周 2026-10-01）----
-    // points 变化（刷新数据）时收起，避免下面挂着一个已经不存在的日期的明细
-    var selectedDate by remember(points) { mutableStateOf<String?>(null) }
+    // ⚠️ key 里**必须带 `month`**（老周 2026-10-08 报「点上一月 / 下一月，明细没跟着变」）：
+    //    原来只 key 了 `points`，切月时选中的那天会一直留着 —— 而那天已经不在当前日历上了，
+    //    明细区就一直挂着**旧月份**那一天的卡片。key 上 `month` 后，切月即收起、自动回落到当月明细。
+    // `points` 一并 key：刷新数据后同样收起，避免挂着一个已经不存在的日期。
+    var selectedDate by remember(points, month) { mutableStateOf<String?>(null) }
     var dayDetail by remember(selectedDate) {
         mutableStateOf<com.stocknote.data.repo.PortfolioRepository.DayDetail?>(null)
     }
@@ -89,13 +106,6 @@ fun PnlCalendarScreen(
         detailLoading = false
     }
 
-    // 可选月份列表（从数据里取，升序）
-    val months = remember(dailyPnl) {
-        dailyPnl.keys.map { it.take(7) }.distinct().sorted()
-    }
-    var monthIndex by remember(months) { mutableStateOf(months.lastIndex.coerceAtLeast(0)) }
-    val month = months.getOrNull(monthIndex).orEmpty()
-
     val monthDays = remember(month, dailyPnl) {
         // ⚠️ 老周 2026-09-29 修：此前这里还 `&& dayOfWeek(it) < 5` 把**周末剔掉**，
         // 于是周末发生的现金变动被月汇总**漏掉**（实测 9-05 周六分红 +300 凭空消失），
@@ -105,6 +115,44 @@ fun PnlCalendarScreen(
         dailyPnl.filterKeys { it.startsWith(month) }
     }
     val maxAbs = remember(monthDays) { monthDays.values.maxOfOrNull { it.absoluteValue } ?: 1.0 }
+
+    // ---- 当月明细的聚合（老周 2026-10-08：没选中某天时，明细区缺省显示**当月**）----
+    // ① 各标的当月累计盈亏：把当月每个曲线点的 pnlBySecurity 逐日累加
+    //  （口径与单日完全一致：纯价格与汇率波动，**不含分红** —— 分红没有标的归属，见 DayDetailCard 注释）
+    val monthPnlBySecurity = remember(month, points) {
+        val acc = LinkedHashMap<String, Double>()
+        points.forEach { p ->
+            if (!p.date.startsWith(month)) return@forEach
+            p.pnlBySecurity.forEach { (id, v) -> acc[id] = (acc[id] ?: 0.0) + v }
+        }
+        acc
+    }
+    // ② 当月出入金净额：`cashFlowsByDate` 本来就是逐日的，按月前缀汇总即可
+    val monthCashFlow = remember(month, cashFlowsByDate) {
+        cashFlowsByDate.filterKeys { it.startsWith(month) }.values.sum()
+    }
+    // ③ 各标的**当月涨跌幅**（老周 2026-10-08）：口径 = 当月各日日涨跌幅连乘 ∏(1+日涨跌) − 1，
+    //  等价于「上月末收盘 → 本月末收盘」。实现在 `EquityCurve.monthlyChangePct`（纯函数、带单测）。
+    val monthChgBySecurity = remember(month, points) {
+        com.stocknote.core.calc.EquityCurve.monthlyChangePct(points, month)
+    }
+    // ④ 当月流水汇总（老周 2026-10-08）：按月查一次（`monthDetail` 与 `dayDetail` 同一套过滤）
+    var monthFlowDetail by remember(month) {
+        mutableStateOf<com.stocknote.data.repo.PortfolioRepository.DayDetail?>(null)
+    }
+    var monthFlowLoading by remember(month) { mutableStateOf(false) }
+    // ⚠️ 这里**不跟 selectedDate 走**（老周 2026-10-08 加了「有交易的日子在日历上打标记」）：
+    // 标记在任何选中状态下都得在，所以按月查一次、常驻。查的是本地库，代价很小。
+    androidx.compose.runtime.LaunchedEffect(month) {
+        if (loadMonthDetail == null) return@LaunchedEffect
+        monthFlowLoading = true
+        monthFlowDetail = runCatching { loadMonthDetail(month) }.getOrNull()
+        monthFlowLoading = false
+    }
+    // 当月**有交易的日子**（买 / 卖 / 转增资本）→ 日历格右上角打点
+    val tradeDates = remember(monthFlowDetail) {
+        monthFlowDetail?.trades?.map { it.tradeDate }?.toSet().orEmpty()
+    }
 
     // 注：此处曾用 TextMeasurer 实测字符宽来自适应字号，真机两轮验证都不可靠
     //（测量拿到的宽度与实际渲染不一致 → 数字照样被裁）。最终方案（老周 2026-09-23 定）：
@@ -125,7 +173,7 @@ fun PnlCalendarScreen(
                 SectionCard(title = "暂无数据") {
                     Text(
                         "需要先有资产曲线（至少 2 个估值点）才能算每日盈亏。\n" +
-                            "请确认网络可用后，到「分析 → 资产曲线」加载一次。",
+                            "请确认网络可用后，到「持仓」页顶部的资产曲线加载一次。",
                         fontSize = 13.sp,
                         color = StockNoteColors.TextTertiary,
                     )
@@ -244,6 +292,8 @@ fun PnlCalendarScreen(
                                 (pnl.absoluteValue / maxAbs).toFloat().coerceIn(0f, 1f)
                             } else 0f,
                             selected = date == selectedDate,
+                            // 这天有买卖交易 → 右上角打点（老周 2026-10-08）
+                            hasTrade = date in tradeDates,
                             // 再点同一天 = 收起（老周 2026-10-01）
                             onClick = { selectedDate = if (selectedDate == date) null else date },
                         )
@@ -253,18 +303,19 @@ fun PnlCalendarScreen(
                 Text(
                     "格子底色与数字 = 当日盈亏（红涨绿跌，**已剔除出入金**，含浮盈浮亏与现金分红，金额取整）；" +
                         "实心格 = 今天；白底「休」= 周末休市（该日盈亏仍计入当月合计）；白底无字 = 暂无数据；" +
-                        "**点格子 → 下方看这天的明细**。",
+                        "**右上角圆点 = 这天有买卖交易**；" +
+                        "**点格子 → 下方看这天的明细**；不点格子时，下方默认显示**当月明细**。",
                     fontSize = 11.sp,
                     color = StockNoteColors.TextTertiary,
                 )
             }
         }
 
-        // ---- 选中日的明细（老周 2026-10-01）----
+        // ---- 明细区（老周 2026-10-01 起：点某天看那天 / 2026-10-08 起：不点就缺省看**当月**）----
         val sel = selectedDate
-        if (sel != null) {
-            val selPoint = points.firstOrNull { it.date == sel }
-            item {
+        item {
+            if (sel != null) {
+                val selPoint = points.firstOrNull { it.date == sel }
                 DayDetailCard(
                     date = sel,
                     pnl = dailyPnl[sel],
@@ -274,7 +325,22 @@ fun PnlCalendarScreen(
                     securityNames = securityNames,
                     detail = dayDetail,
                     loading = detailLoading,
+                    // 收起 = 回到"当月明细"（不再是把明细整段藏起来）
                     onClose = { selectedDate = null },
+                )
+            } else {
+                MonthDetailCard(
+                    month = month,
+                    pnl = monthDays.values.sum(),
+                    cashFlow = monthCashFlow,
+                    pnlBySecurity = monthPnlBySecurity,
+                    // 各标的当月涨跌幅（日涨跌连乘）—— 老周 2026-10-08
+                    chgBySecurity = monthChgBySecurity,
+                    securityNames = securityNames,
+                    dayCount = monthDays.size,
+                    // 当月流水汇总（与「每日流水」同一套数据，只是按月过滤）
+                    detail = monthFlowDetail,
+                    loading = monthFlowLoading,
                 )
             }
         }
@@ -288,7 +354,8 @@ fun PnlCalendarScreen(
  *  - 有盈亏：**浅色底 + 同色系深色字**（涨红 / 跌绿），金额完整 2 位小数（+23481.34 / -16986.17）；
  *  - 今天：**实心色底 + 白字**（涨红/跌绿），一眼能定位；
  *  - 周末无数据：灰底 + 灰日期 +「休」；
- *  - 其余无数据（未来日期）：更浅的灰底 + 灰日期，不显示金额。
+ *  - 其余无数据（未来日期）：更浅的灰底 + 灰日期，不显示金额；
+ *  - **这天有买卖交易：右上角一个品牌色圆点**（老周 2026-10-08）。
  * 底色深浅随盈亏绝对值相对当月最大波动微调（保留信息量，但不做重色块）。
  *
  * 布局（老周 2026-09-23 真机反馈后定）：**日期固定贴顶部，金额/「休」居格子下方**；
@@ -305,6 +372,8 @@ private fun DayCell(
     intensity: Float,
     /** 是否被选中（老周 2026-10-01：点某天 → 日历下方展开这天的明细） */
     selected: Boolean,
+    /** 这天是否有买卖交易（老周 2026-10-08：有则在右上角打点） */
+    hasTrade: Boolean,
     onClick: () -> Unit,
 ) {
     // 周末：**一律白底 + 「休」**，即使当天确有现金变动（如除权日落在周末的分红）也不显示金额
@@ -377,6 +446,18 @@ private fun DayCell(
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
                     .padding(bottom = 3.dp),
+            )
+        }
+        // 有买卖交易的标记（老周 2026-10-08）：右上角一个小圆点。
+        // 为什么用点不用字：格子只有 ~48dp 宽、还要塞日期与金额，加文字必然挤到金额；
+        // 点在右上角也不碰日期（日期是 TopCenter），涨红/跌绿/白底几种底色上都看得见。
+        if (hasTrade) {
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 4.dp, end = 4.dp)
+                    .size(5.dp)
+                    .background(StockNoteColors.Brand, CircleShape),
             )
         }
     }
@@ -540,6 +621,189 @@ private fun DayDetailCard(
                 }
             }
         }
+    }
+}
+
+/**
+ * **当月明细卡**（老周 2026-10-08）—— 日历里**没有选中某天**时的缺省明细。
+ *
+ * 与 [DayDetailCard] 占**同一个位置**，二者互斥：选中某天看那天的、否则看当月
+ *（所以点「收起 ✕」就是回到当月，而不是把明细整段藏起来）。
+ *
+ * 内容：当月盈亏合计 / 各标的当月累计盈亏（带**当月涨跌幅**）/ **当月流水汇总**。
+ * 逐笔流水仍按天看（点日历里的某一天），这里只给汇总。
+ *
+ * ⚠️ 流水汇总走的是 `monthDetail`（按 `yyyy-MM` 前缀过滤），**不是**把 30 天的 `dayDetail` 拉一遍 ——
+ * 后者每次都是全表过滤再筛日期，为一个月拉 30 次不划算。
+ */
+@Composable
+private fun MonthDetailCard(
+    month: String,
+    /** 当月盈亏合计（**已剔除出入金**，与日历格子同源） */
+    pnl: Double,
+    /** 当月出入金净额（存入为正）。只是显示出来让口径可见，不参与 [pnl] 计算。 */
+    cashFlow: Double,
+    /** 各标的当月累计盈亏（securityId -> 金额） */
+    pnlBySecurity: Map<String, Double>,
+    /** 各标的**当月涨跌幅**（securityId -> 比率，如 0.0123 = +1.23%）；缺失则不显示 */
+    chgBySecurity: Map<String, Double> = emptyMap(),
+    securityNames: Map<String, String>,
+    /** 当月有记录的天数 */
+    dayCount: Int,
+    /** 当月流水（按月过滤，与单日同一套数据）；null = 未接上或读取失败 */
+    detail: com.stocknote.data.repo.PortfolioRepository.DayDetail?,
+    loading: Boolean,
+) {
+    SectionCard(title = "$month 当月明细") {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("当月盈亏", fontSize = 12.sp, color = StockNoteColors.TextSecondary)
+            Text("未选中某天时的缺省明细", fontSize = 11.sp, color = StockNoteColors.TextTertiary)
+        }
+        Text(
+            Format.moneySigned(pnl),
+            fontSize = 22.sp,
+            fontWeight = FontWeight.ExtraBold,
+            color = if (pnl >= 0) StockNoteColors.Up else StockNoteColors.Down,
+        )
+        Text(
+            // 没有出入金的月份就不提这一句，免得"剔除 +0.00"看着像噪音
+            if (cashFlow.absoluteValue >= 0.01) {
+                "已剔除当月出入金净额 ${Format.moneySigned(cashFlow)}（入金只是搬本金，不算收益）· 当月有记录 $dayCount 天"
+            } else {
+                "当月无出入金 · 当月有记录 $dayCount 天"
+            },
+            fontSize = 11.sp,
+            color = StockNoteColors.TextTertiary,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+
+        // ---- 各标的当月累计盈亏 ----
+        Spacer(Modifier.height(14.dp))
+        Text("各标的盈亏（当月累计）", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = StockNoteColors.TextPrimary)
+        Text(
+            "逐日价格与汇率波动累加（不含分红）；% = 该标的当月涨跌幅",
+            fontSize = 11.sp,
+            color = StockNoteColors.TextTertiary,
+        )
+        Spacer(Modifier.height(6.dp))
+        if (pnlBySecurity.isEmpty()) {
+            Text(
+                "当月没有持仓盈亏记录（可能没有持仓，或当月无行情）",
+                fontSize = 12.sp,
+                color = StockNoteColors.TextTertiary,
+            )
+        } else {
+            // 与单日明细同一套排序与配色：按**净额**从盈到亏（赚得最多的在最上）
+            pnlBySecurity.entries
+                .sortedByDescending { it.value }
+                .forEach { (id, v) ->
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            securityNames[id] ?: id,
+                            fontSize = 13.sp,
+                            color = StockNoteColors.TextPrimary,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            buildString {
+                                append(Format.moneySigned(v))
+                                // 该标的的**当月涨跌幅**（老周 2026-10-08）：口径与单日一致，只是按日连乘到整月
+                                val chg = chgBySecurity[id]
+                                if (chg != null) {
+                                    append("  ")
+                                    append(Format.percent(chg, decimals = 2))
+                                }
+                            },
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (v >= 0) StockNoteColors.Up else StockNoteColors.Down,
+                        )
+                    }
+                }
+        }
+
+        // ---- ② 当月流水汇总（老周 2026-10-08）----
+        Spacer(Modifier.height(16.dp))
+        Text("当月流水汇总", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = StockNoteColors.TextPrimary)
+        Text(
+            "按月汇总；要看逐笔，点日历里的某一天",
+            fontSize = 11.sp,
+            color = StockNoteColors.TextTertiary,
+        )
+        Spacer(Modifier.height(6.dp))
+        when {
+            loading -> Text("读取中…", fontSize = 12.sp, color = StockNoteColors.TextTertiary)
+
+            detail == null -> Text(
+                "流水读取失败（明细数据未接上）",
+                fontSize = 12.sp,
+                color = StockNoteColors.TextTertiary,
+            )
+
+            detail.isEmpty -> Text(
+                "当月没有买卖、出入金或分红",
+                fontSize = 12.sp,
+                color = StockNoteColors.TextTertiary,
+            )
+
+            else -> {
+                // 交易：只报**笔数与只数**，不报金额 —— 买卖可能跨币种（HKD/USD 原币），
+                // 原币金额直接相加是错的；折算本位币又要再引一套汇率口径，不值得。
+                if (detail.trades.isNotEmpty()) {
+                    val buy = detail.trades.count { it.side == com.stocknote.core.model.TradeSide.BUY }
+                    val sell = detail.trades.count { it.side == com.stocknote.core.model.TradeSide.SELL }
+                    val cap = detail.trades.count { it.side == com.stocknote.core.model.TradeSide.CAPITALIZE }
+                    DetailRow(
+                        label = "交易",
+                        value = buildString {
+                            append("${detail.trades.size} 笔")
+                            if (buy > 0) append(" · 买 $buy")
+                            if (sell > 0) append(" · 卖 $sell")
+                            if (cap > 0) append(" · 转增 $cap")
+                            append(" · 涉及 ${detail.trades.map { it.securityId }.distinct().size} 只")
+                        },
+                    )
+                }
+                if (detail.cashFlows.isNotEmpty()) {
+                    val inflow = detail.cashFlows.filter { it.amountBase >= 0 }.sumOf { it.amountBase }
+                    val outflow = detail.cashFlows.filter { it.amountBase < 0 }.sumOf { -it.amountBase }
+                    // ⚠️ 拆成两行：合成一句（入/出/净额）后 value 太长，会把 DetailRow 的
+                    // label 挤成一字一行（2026-10-08 真机踩到）。净额不在这里重复 ——
+                    // 卡片副标题已经写了「已剔除当月出入金净额 …」。
+                    DetailRow(label = "入金", value = Format.money(inflow))
+                    DetailRow(label = "出金", value = Format.money(outflow))
+                }
+                val cashDiv = detail.dividends.filter { it.type == "CASH" }
+                if (cashDiv.isNotEmpty()) {
+                    DetailRow(
+                        label = "现金分红",
+                        value = "${Format.moneySigned(cashDiv.sumOf { it.amountBase })}（${cashDiv.size} 笔）",
+                    )
+                }
+                val bonusShares = detail.dividends.sumOf { it.bonusShares }
+                val rightsShares = detail.dividends.sumOf { it.rightsShares }
+                if (bonusShares > 0 || rightsShares > 0) {
+                    DetailRow(
+                        label = "送股 / 配股",
+                        value = "送股 ${Format.plain(bonusShares, 0)} 股 · 配股 ${Format.plain(rightsShares, 0)} 股",
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "点日历里任意一天 → 看那天的各标的盈亏与当日流水",
+            fontSize = 11.sp,
+            color = StockNoteColors.TextTertiary,
+        )
     }
 }
 

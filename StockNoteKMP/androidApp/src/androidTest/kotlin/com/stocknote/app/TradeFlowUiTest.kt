@@ -107,8 +107,9 @@ class TradeFlowUiTest {
         // 底部三个 tab（文字或图标）
         val hasStatistic = device.hasObject(By.textContains("统计"))
         val hasHolding = device.hasObject(By.textContains("持仓"))
-        val hasAnalysis = device.hasObject(By.textContains("分析"))
-        assertTrue("底部导航缺少 tab（统计/持仓/分析）", hasStatistic && hasHolding && hasAnalysis)
+        // ⚠️ 第五个 tab 于 2026-10-08 由「分析」改名为「看天看地」（内容也换了）
+        val hasAnalysis = device.hasObject(By.textContains("看天看地"))
+        assertTrue("底部导航缺少 tab（统计分析/持仓/看天看地）", hasStatistic && hasHolding && hasAnalysis)
     }
 
     /**

@@ -35,6 +35,11 @@ expect fun nowEpochMs(): Long
 /**
  * epoch 毫秒 → 设备本地时区的「yyyy-MM-dd HH:mm」。
  * 修复「更新于」显示 UTC 的问题（共享层无法取本地时区），第 8 个平台隔离点。
+ *
+ * ⚠️ **格式契约（三端必须一致）**（L-1，审核报告 2026-10-09）：
+ * 前 10 位固定是 `yyyy-MM-dd`、第 11 位是空格 —— 「看天看地」的「更新于 2026-10-09」
+ * 靠 `take(10)` 取日期（`SkyEarthHolder.skyUpdatedDate` / `earthUpdatedDate`）。
+ * **改格式串前先 grep 调用方**，否则 `take(10)` 会静默截出错日期。
  */
 expect fun formatLocalDateTime(epochMs: Long): String
 

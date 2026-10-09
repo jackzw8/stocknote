@@ -61,8 +61,6 @@ private fun StatisticScreenContent(
     /** 关闭「刷新完成」提示 */
     onDismissRefreshMessage: () -> Unit = {},
     onOpenSecurity: (String) -> Unit = {},
-    /** 切换底部 tab（「全部›」/「📊 分析」入口）：直接 select，不走导航栈（修复 tab 卡死） */
-    onSwitchTab: (com.stocknote.feature.state.Screen) -> Unit = {},
     /** 切换**全局**「隐藏盈亏」模式（REQ-VIEW-09，老周 2026-09-30）：App 层接到设置 holder。 */
     onTogglePrivacy: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -95,7 +93,8 @@ private fun StatisticScreenContent(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column {
-                    Text("交易统计", fontSize = pageSp(21f), fontWeight = FontWeight.ExtraBold, color = StockNoteColors.TextPrimary)
+                    // 老周 2026-10-08：标题与底部 tab 名统一改为「统计分析」（原「交易统计」/「统计」）
+                    Text("统计分析", fontSize = pageSp(21f), fontWeight = FontWeight.ExtraBold, color = StockNoteColors.TextPrimary)
                     // 原型 privacy.html：标题下方标注当前处于隐私态，一眼知道"数字被藏起来了"
                     if (privacy) {
                         Text(
@@ -240,6 +239,14 @@ private fun StatisticScreenContent(
                 }
             }
         }
+
+        // ---- 「分析图表」/「收益率分析」入口（老周 2026-10-08）----
+        // 「分析图表」进的是**二级页** AppRoute.AnalysisChart（绩效总览 / 连胜·连亏 / 按策略分析 / 盈亏归因
+        // 这四块原挂在「分析」tab 上，后来整体搬成了二级页）；
+        // 「收益率分析」原本挂在分析页右上角，也挪到了本页。
+        // 两个都用**白底品牌字**的次要样式，与上面蓝底「刷新数据」（主操作）区分开。
+        item { StatNavButton(icon = "📊", text = "分析图表") { AppNav.push(AppRoute.AnalysisChart) } }
+        item { StatNavButton(icon = "💹", text = "收益率分析") { AppNav.push(AppRoute.ReturnAnalysis) } }
 
         // ---- 持仓 TOP5 已迁到持仓页（老周 2026-10-02）----
         // 统计页只保留市值/浮盈/现金/回撤/胜率这些**汇总指标**；个股明细类内容统一放持仓页。
@@ -395,6 +402,31 @@ private fun HeroMetric(label: String, value: String, modifier: Modifier = Modifi
     }
 }
 
+/**
+ * 统计页的「次要入口」按钮（老周 2026-10-08）：白底 + 品牌色字 + 图标，整行铺满、
+ * 与「刷新数据」同尺寸但**视觉更轻** —— 让主操作（刷新）和跳转入口一眼可分。
+ */
+@Composable
+private fun StatNavButton(icon: String, text: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .padding(top = 10.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color.White)
+            .clickable { onClick() }
+            .padding(vertical = 12.dp)
+            .semantics { contentDescription = text },
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(icon, fontSize = pageSp(15f))
+        Spacer(Modifier.width(8.dp))
+        Text(text, fontSize = pageSp(14f), fontWeight = FontWeight.Bold, color = StockNoteColors.Brand)
+    }
+}
+
 /** 整页字号放大 1.2 倍（老周 2026-09-21，与统计页一致；未包的页面默认 1f 不受影响）。 */
 @Composable
 fun StatisticScreen(
@@ -405,15 +437,13 @@ fun StatisticScreen(
     /** 关闭「刷新完成」提示 */
     onDismissRefreshMessage: () -> Unit = {},
     onOpenSecurity: (String) -> Unit = {},
-    /** 切换底部 tab（「全部›」/「📊 分析」入口）：直接 select，不走导航栈（修复 tab 卡死） */
-    onSwitchTab: (com.stocknote.feature.state.Screen) -> Unit = {},
     /** 切换**全局**「隐藏盈亏」模式（REQ-VIEW-09，老周 2026-09-30）：App 层接到设置 holder。 */
     onTogglePrivacy: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     androidx.compose.runtime.CompositionLocalProvider(LocalPageTextScale provides PAGE_TEXT_SCALE) {
         StatisticScreenContent(
-            state, onRefresh, onRefreshAll, onDismissRefreshMessage, onOpenSecurity, onSwitchTab,
+            state, onRefresh, onRefreshAll, onDismissRefreshMessage, onOpenSecurity,
             onTogglePrivacy, modifier,
         )
     }

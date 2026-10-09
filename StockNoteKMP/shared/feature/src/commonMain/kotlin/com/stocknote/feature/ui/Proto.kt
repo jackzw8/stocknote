@@ -31,6 +31,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.stocknote.feature.state.Screen
 import com.stocknote.feature.theme.StockNoteColors
 import com.stocknote.feature.theme.marketAccent
 import com.stocknote.feature.theme.marketAccentSoft
@@ -441,7 +442,12 @@ fun MetricCell(
     }
 }
 
-/** 底部导航：对应 .tabbar（4 项，中间「记一笔」凸起 46×46 渐变圆角方块） */
+/**
+ * 底部导航（5 项）：统计分析 / 持仓 / 探索 / 交易计划 / 看天看地。
+ *
+ * ⚠️ 文案**不在这里写死**，一律取 [Screen.label]（老周 2026-10-08：一次改了三处名字，
+ * 散在各处写字符串必然漏一处）。
+ */
 @Composable
 fun ProtoTabBar(
     selected: String,
@@ -456,13 +462,25 @@ fun ProtoTabBar(
             .height(66.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        TabItem(Modifier.weight(1f), "📈", "统计", selected == "统计") { onTab("统计") }
-        TabItem(Modifier.weight(1f), "💼", "持仓", selected == "持仓") { onTab("持仓") }
-        // 🧭 探索（老周 2026-09-24）：4 项 → 5 项，插在正中间
-        TabItem(Modifier.weight(1f), "🧭", "探索", selected == "探索") { onTab("探索") }
-        // 🎯 交易计划（REQ-PLAN-01，老周 2026-09-19）：3 项 → 4 项
-        TabItem(Modifier.weight(1f), "🎯", "计划", selected == "计划") { onTab("计划") }
-        TabItem(Modifier.weight(1f), "📊", "分析", selected == "分析") { onTab("分析") }
+        // ⚠️ 文案取 `Screen.label`，顺序与 [Screen.entries] 一致（见 KDoc 说明）
+        val tabs = listOf(
+            Screen.STATISTIC to "📈",
+            Screen.HOLDINGS to "💼",
+            // 🧭 探索（老周 2026-09-24）：4 项 → 5 项，插在正中间
+            Screen.EXPLORE to "🧭",
+            // 🎯 交易计划（REQ-PLAN-01，老周 2026-09-19）：3 项 → 4 项
+            Screen.PLAN to "🎯",
+            // 📊 看天看地（老周 2026-10-08，原「分析」）
+            Screen.ANALYSIS to "📊",
+        )
+        tabs.forEach { (screen, icon) ->
+            TabItem(
+                modifier = Modifier.weight(1f),
+                icon = icon,
+                label = screen.label,
+                selected = selected == screen.label,
+            ) { onTab(screen.label) }
+        }
     }
 }
 

@@ -1,0 +1,33 @@
+-- 迁移 v18 → v19（看天看地模块 SE-3，老周 2026-10-09）：
+-- 新增 sky_factor（关注点清单快照）与 sky_judgement（判断历史留档）两张表 + 三个索引。
+--
+-- ⚠️ 这两张表装的是用户主观判断记录，丢了找不回来 —— 必须进备份清单
+--    （三处同步：SkyEarth.sq / 本文件 / BackupSchema.kt）。
+-- ⚠️ day 是本地时区的 'YYYY-MM-DD'（todayIso()）；sky_judgement 的
+--    UNIQUE(factor_id, day) 是「同日只留最后一次」的实现手段，别改成普通索引。
+-- 无需回填：新表，空即是有效初值。
+
+CREATE TABLE sky_factor (
+    id TEXT NOT NULL PRIMARY KEY,
+    domain TEXT NOT NULL,
+    scope_key TEXT NOT NULL,
+    title TEXT NOT NULL,
+    sort_order INTEGER NOT NULL,
+    score INTEGER,
+    note TEXT,
+    judged_at INTEGER,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX sky_factor_scope_idx ON sky_factor(domain, scope_key, sort_order);
+
+CREATE TABLE sky_judgement (
+    id TEXT NOT NULL PRIMARY KEY,
+    factor_id TEXT NOT NULL,
+    day TEXT NOT NULL,
+    score INTEGER NOT NULL,
+    judged_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX sky_judgement_day_idx ON sky_judgement(factor_id, day);
+CREATE INDEX sky_judgement_time_idx ON sky_judgement(factor_id, judged_at);

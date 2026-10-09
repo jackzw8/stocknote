@@ -25,7 +25,7 @@ kotlin {
  *
  * ⚠️ jpackage 只接受 `major.minor.patch` 纯数字，**不能带后缀**（`-dbg` / `· 桌面版` 之类）。
  */
-val desktopVersion = "1.1.11"
+val desktopVersion = "1.2.0"
 
 /**
  * 把版本号生成成 Kotlin 常量（`:desktopApp` 的「关于」页与导出日志用）。

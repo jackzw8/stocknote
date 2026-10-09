@@ -95,6 +95,43 @@ class EquityCurveTest {
         assertEquals(0.20, points.first { it.date == "2026-01-12" }.chgPctBySecurity["s1"]!!, 1e-9, "复牌日按上一收盘")
     }
 
+    // ---------------------------------------------------------------- 每只标的的当月涨跌幅
+    // （老周 2026-10-08：盈亏日历「当月明细」要显示标的的月涨跌百分比）
+
+    @Test
+    fun 月涨跌幅_等于当月各日涨跌幅连乘() {
+        // 1/10 买 100@10；1/11 收 11（+10%）；1/12 收 12.1（+10%）
+        // → 当月 = 1.10 × 1.10 − 1 = +21%
+        val points = EquityCurve.build(
+            transactions = listOf(tx("2026-01-10", TradeSide.BUY, 100.0, 10.0)),
+            cashFlows = emptyList(),
+            currentCash = 10_000.0,
+            closesBySecurityId = mapOf(
+                "s1" to listOf("2026-01-10" to 10.0, "2026-01-11" to 11.0, "2026-01-12" to 12.1),
+            ),
+        )
+        val jan = EquityCurve.monthlyChangePct(points, "2026-01")
+        assertEquals(0.21, jan["s1"]!!, 1e-9, "1.10 × 1.10 − 1 = 21%（不是 10% + 10% 的简单相加）")
+        assertTrue(EquityCurve.monthlyChangePct(points, "2026-02").isEmpty(), "没数据的月份不产出")
+    }
+
+    @Test
+    fun 月涨跌幅_等价于上月末收盘到本月末收盘() {
+        // 曲线从 2025-12-31（收 10）起，2026-01-02 收 12
+        // → 1/01 是顺延日（涨跌 0）、1/02 = (12−10)/10 = +20%
+        // → 当月连乘 = 0 × 20% = +20%，正好是「上月末收盘 → 本月末收盘」
+        val points = EquityCurve.build(
+            transactions = listOf(tx("2025-12-31", TradeSide.BUY, 100.0, 10.0)),
+            cashFlows = emptyList(),
+            currentCash = 10_000.0,
+            closesBySecurityId = mapOf(
+                "s1" to listOf("2025-12-31" to 10.0, "2026-01-02" to 12.0),
+            ),
+        )
+        val jan = EquityCurve.monthlyChangePct(points, "2026-01")
+        assertEquals(0.20, jan["s1"]!!, 1e-9, "当月第一个点已带上跨月那天的涨跌，连乘即整月")
+    }
+
     @Test
     fun 明细_清仓当天等于卖出所得减昨日市值() {
         // 1/10 买 100@10；1/11 以 12 全部卖出 → 今日市值 0、昨日 1000、收回 1200 → 盈亏 +200

@@ -19,6 +19,7 @@ import com.stocknote.data.repo.PortfolioRepository
 import com.stocknote.data.repo.QuoteRepository
 import com.stocknote.data.repo.ReviewRepository
 import com.stocknote.data.repo.SettingsRepository
+import com.stocknote.data.repo.SkyEarthRepository
 import com.stocknote.data.repo.TagRepository
 import com.stocknote.data.repo.WatchlistRepository
 import com.stocknote.data.repo.TradeRepository
@@ -86,6 +87,9 @@ class AppContainer(databaseName: String = DEFAULT_DB_NAME) {
 
     // ⚠️ 第 5 批（2026-09-29）：自选域（10 个方法，本批最大收益）。
     val watch: WatchlistRepository = WatchlistRepository(db)
+
+    // ⚠️ 看天看地域（SE-4，2026-10-09）：叶子域，只依赖 db + app_setting，零跨域依赖。
+    val skyEarth: SkyEarthRepository = SkyEarthRepository(db)
 
     // ⚠️ 第 6 批：CSV 域的**生成侧**（4 个方法纯读拼串）实现已搬进，只需 db。
     // 导入侧（applyTradesCsv / applyCashFlowsCsv）仍在 PortfolioRepository。

@@ -1,0 +1,89 @@
+-- 看天看地（SKY-EARTH）：关注点清单快照 + 判断历史留档（FR-SE-01~FR-SE-10）。
+--
+-- ⚠️ 这两张表装的是**用户一字一句敲的主观判断记录**（「我当时为什么这么看」），
+--    丢了就再也找不回来 —— 必须进 BackupSchema.tables（绝不能放 excluded）。
+--    三处同步：本文件 / 18.sqm / BackupSchema.kt，漏一处 BackupCoverageTest 会红。
+--
+-- ⚠️ sky_factor.score 为 NULL 表示**未判断**，与 0（中性）语义不同 —— 未判断不参与总分合成。
+-- ⚠️ 删除关注点时必须级联删 sky_judgement（无外键，级联全靠手写 —— 与 trade_photo 同款惯例）。
+
+CREATE TABLE sky_factor (
+    id TEXT NOT NULL PRIMARY KEY,
+    domain TEXT NOT NULL,            -- 'SKY' | 'EARTH'
+    scope_key TEXT NOT NULL,         -- 天组固定 ''；地组 = 标的代码（如 'hk00700'）
+    title TEXT NOT NULL,
+    sort_order INTEGER NOT NULL,
+    score INTEGER,                   -- -1 | 0 | 1 | NULL(未判断)
+    note TEXT,                       -- 依据备注，≤200 字
+    judged_at INTEGER,               -- 最后一次判断的 epoch ms；NULL = 从未判断
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX sky_factor_scope_idx ON sky_factor(domain, scope_key, sort_order);
+
+-- 判断历史（FR-SE-08）：同 factor 同自然日只留最后一条 —— 唯一索引 + INSERT OR REPLACE 实现。
+-- ⚠️ day 是**本地时区**的 'YYYY-MM-DD'（todayIso()），不是 UTC；不要改。
+-- ⚠️ 别把 upsertJudgement 换成普通 INSERT：同日多次改会留一堆毛刺（需求明确同日只留最后一次）。
+CREATE TABLE sky_judgement (
+    id TEXT NOT NULL PRIMARY KEY,
+    factor_id TEXT NOT NULL,
+    day TEXT NOT NULL,               -- 'YYYY-MM-DD'（本地时区）
+    score INTEGER NOT NULL,          -- -1 | 0 | 1
+    judged_at INTEGER NOT NULL       -- epoch ms
+);
+
+CREATE UNIQUE INDEX sky_judgement_day_idx ON sky_judgement(factor_id, day);
+CREATE INDEX sky_judgement_time_idx ON sky_judgement(factor_id, judged_at);
+
+-- 某一组的完整清单（排序即重要程度；同日创建按 created_at 兜底稳定）
+selectGroup:
+SELECT * FROM sky_factor
+WHERE domain = ? AND scope_key = ?
+ORDER BY sort_order, created_at;
+
+selectById:
+SELECT * FROM sky_factor WHERE id = ?;
+
+insertFactor:
+INSERT OR REPLACE INTO sky_factor(id, domain, scope_key, title, sort_order, score, note, judged_at, created_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- 打分：写本表快照（历史表由 SkyEarthRepository.setScore 在同一事务里写 upsertJudgement）
+updateScore:
+UPDATE sky_factor SET score = ?, judged_at = ? WHERE id = ?;
+
+updateTitleNote:
+UPDATE sky_factor SET title = ?, note = ? WHERE id = ?;
+
+-- 新增条目时取「当前组内最大值 + 1」
+maxSortOrder:
+SELECT max(sort_order) FROM sky_factor WHERE domain = ? AND scope_key = ?;
+
+-- 拖拽排序：按传入顺序批量重排（照搬自选域的写法）
+updateSortOrder:
+UPDATE sky_factor SET sort_order = ? WHERE id = ?;
+
+deleteFactor:
+DELETE FROM sky_factor WHERE id = ?;
+
+countGroup:
+SELECT count(*) FROM sky_factor WHERE domain = ? AND scope_key = ?;
+
+-- 判断历史（时间升序；详情页「判断阶梯线」与变更记录都用它）
+selectJudgements:
+SELECT * FROM sky_judgement WHERE factor_id = ? ORDER BY judged_at;
+
+-- 同自然日覆盖（靠 sky_judgement_day_idx 唯一索引；id 由调用方生成，同日覆盖时 id 也换新）
+upsertJudgement:
+INSERT OR REPLACE INTO sky_judgement(id, factor_id, day, score, judged_at)
+VALUES (?, ?, ?, ?, ?);
+
+-- 级联第一步：删关注点的全部历史（必须在与 deleteFactor 同一事务里）
+deleteJudgementsOf:
+DELETE FROM sky_judgement WHERE factor_id = ?;
+
+-- 地组里「有清单的标的」（FR-SE-10 换标的时空态的第二个出口：从哪个标的复制条目）
+selectEarthScopes:
+SELECT DISTINCT scope_key FROM sky_factor
+WHERE domain = 'EARTH' AND scope_key <> ''
+ORDER BY scope_key;

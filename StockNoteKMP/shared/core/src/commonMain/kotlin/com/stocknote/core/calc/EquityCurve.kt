@@ -403,6 +403,31 @@ object EquityCurve {
         return map
     }
 
+    /**
+     * **某月各标的的涨跌幅**（老周 2026-10-08，盈亏日历「当月明细」用）。
+     *
+     * `chg(标的, 月) = ∏(1 + 该标的当日涨跌幅) − 1` —— 把当月各日的**日涨跌幅连乘**（复利）。
+     *
+     * 为什么这样就等于「上月末收盘 → 本月末收盘」：曲线日期轴是**连续自然日**、休市日顺延收盘价，
+     * 当月**第一个点**的日涨跌本来就是相对上月末那天算出来的，所以连乘下来正好是整月涨跌。
+     *
+     * ⚠️ 口径与 [Point.chgPctBySecurity] 完全一致：**纯价格**，不含汇率与分红；
+     * 缺昨收的日子（曲线首日 / 无行情）自然不参与连乘，不会把结果算歪。
+     *
+     * @return securityId -> 比率（0.0123 = +1.23%）；整月都没该标的的日涨跌时，它不出现在结果里
+     */
+    fun monthlyChangePct(points: List<Point>, month: String): Map<String, Double> {
+        val acc = LinkedHashMap<String, Double>()
+        points.forEach { p ->
+            if (!p.date.startsWith(month)) return@forEach
+            p.chgPctBySecurity.forEach { (id, chg) ->
+                val prev = acc[id]
+                acc[id] = if (prev == null) chg else (1.0 + prev) * (1.0 + chg) - 1.0
+            }
+        }
+        return acc
+    }
+
     /** 展示粒度（REQ-VIEW-05：日/周/月/年） */
     enum class Granularity(val label: String) { DAY("日"), WEEK("周"), MONTH("月"), YEAR("年") }
 

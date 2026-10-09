@@ -26,6 +26,9 @@ internal object BackupSchema {
         "cninfo_risk",
         // 资讯收藏（老周 2026-09-25 加 → 三处同步：.sq / 14.sqm / 这里）
         "news_favorite",
+        // 看天看地：关注点清单 + 判断历史（老周 2026-10-09 加 → 三处同步：SkyEarth.sq / 18.sqm / 这里）
+        // ⚠️ 用户主观判断记录，丢了找不回来 —— 必须在 tables 里，绝不能放 excluded
+        "sky_factor", "sky_judgement",
     )
 
     /** 每张表的**全部业务列** —— 漏一列，恢复时该列直接落回默认值 = 静默丢数据。 */
@@ -79,6 +82,13 @@ internal object BackupSchema {
         // 资讯收藏（老周 2026-09-25 加 → 三处同步：.sq / 14.sqm / 这里）
         "news_favorite" to listOf(
             "id", "symbol", "title", "src", "time_text", "url", "kind", "created_at",
+        ),
+        // 看天看地（老周 2026-10-09 加 → 三处同步：SkyEarth.sq / 18.sqm / 这里）
+        "sky_factor" to listOf(
+            "id", "domain", "scope_key", "title", "sort_order", "score", "note", "judged_at", "created_at",
+        ),
+        "sky_judgement" to listOf(
+            "id", "factor_id", "day", "score", "judged_at",
         ),
     )
 

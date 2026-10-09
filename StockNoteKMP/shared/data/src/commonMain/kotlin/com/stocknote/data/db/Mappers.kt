@@ -4,6 +4,10 @@ import com.stocknote.core.model.Currency
 import com.stocknote.core.model.DividendRecord
 import com.stocknote.core.model.CashFlowRecord
 import com.stocknote.core.model.Market
+import com.stocknote.core.model.SkyAttitude
+import com.stocknote.core.model.SkyDomain
+import com.stocknote.core.model.SkyFactor
+import com.stocknote.core.model.SkyJudgement
 import com.stocknote.core.model.TradeSide
 import com.stocknote.core.model.Security as DomainSecurity
 import com.stocknote.core.model.Transaction as DomainTransaction
@@ -97,6 +101,29 @@ internal fun Cash_flow.toDomain(): CashFlowRecord = CashFlowRecord(
     fxRate = fx_rate,
     amountBase = amount_base,
     note = note,
+)
+
+// 看天看地（老周 2026-10-09）：同一套 snake_case 规则 → Sky_factor / Sky_judgement
+internal fun Sky_factor.toDomain(): SkyFactor = SkyFactor(
+    id = id,
+    domain = SkyDomain.ofRaw(domain) ?: SkyDomain.SKY,
+    scopeKey = scope_key,
+    title = title,
+    sortOrder = sort_order,
+    // ⚠️ NULL = 未判断（≠ 中性）：这里**绝不能**兜底成 0
+    score = score?.let { SkyAttitude.ofValue(it.toInt()) },
+    note = note,
+    judgedAt = judged_at,
+    createdAt = created_at,
+)
+
+internal fun Sky_judgement.toDomain(): SkyJudgement = SkyJudgement(
+    id = id,
+    factorId = factor_id,
+    day = day,
+    // 非空列 + 只写合法值（-1/0/1），理论上不可达兜底分支；不写 0 会让语义含糊，用中性只是占位
+    score = SkyAttitude.ofValue(score.toInt()) ?: SkyAttitude.NEUTRAL,
+    judgedAt = judged_at,
 )
 
 // 交易计划：trade_plan → Trade_plan（同一套 snake_case 规则，见上方 Cash_flow 的说明）

@@ -105,6 +105,24 @@ sealed interface AppRoute {
      */
     data object PlaneShooter : AppRoute
 
+    /**
+     * **分析图表**二级页（老周 2026-10-08）：统计分析页 →「📊 分析图表」。
+     *
+     * 原来这四块（绩效总览 / 连胜·连亏 / 按策略分析 / 盈亏归因）挂在「分析」tab 上；
+     * 那个 tab 改成「看天看地」空白页后，它们整体搬来这里、降级成二级页。
+     */
+    data object AnalysisChart : AppRoute
+
+    /**
+     * **看天看地 · 种子清单导入**（老周 2026-10-09，SE-7）：复制提示词 → 粘贴 AI 返回 → 预览 → 导入。
+     *
+     * [domain] 是入口建议的组；最终导入组由粘贴文本的 `SEED:` 头行决定（界面会跟着切）。
+     */
+    data class SkySeedImport(val domain: com.stocknote.core.model.SkyDomain) : AppRoute
+
+    /** **看天看地 · 关注点详情**（老周 2026-10-09，SE-8）：判断阶梯线 × 同期基准走势。 */
+    data class SkyFactorDetail(val factorId: String) : AppRoute
+
     /** 个股风险扫雷（老周 2026-09-24）：探索页 →「个股扫雷」，规则见《东财F10个股风险扫雷技术方案》 */
     data object RiskScan : AppRoute
 }

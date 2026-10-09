@@ -64,6 +64,10 @@ import com.stocknote.feature.theme.marketAccent
 private fun HoldingsScreenContent(
     state: AppUiState,
     onOpenSecurity: (String) -> Unit,
+    /** 资产曲线（组合总资产）—— 老周 2026-10-08 从分析页迁到本页顶部 */
+    equityCurve: com.stocknote.data.repo.PortfolioRepository.EquityCurveResult?,
+    /** 基准（沪深300）逐日收盘 (date, close)；null = 不叠基准线 */
+    benchmark: List<Pair<String, Double>>?,
     modifier: Modifier = Modifier,
 ) {
     // ⚠️ 待登记分红弹窗已上提为**全局宿主** [DividendAlertHost]（老周 2026-09-30）：
@@ -130,6 +134,12 @@ private fun HoldingsScreenContent(
                 // 注：🔍 查询入口已于 2026-10-02 迁到「持仓明细」页（原在本页右上角）
             }
         }
+
+        // ---- 资产曲线（组合总资产）----
+        // 老周 2026-10-08：从**分析页迁到本页顶部**（分析页改作「看天看地」，不再放曲线）。
+        // ⚠️ 数据由 App 层按「本页是否可见」门控拉取（`equityCurveCached()`）：
+        //    null = 还没拉完（卡片会显示"正在拉取…"），不是错误。
+        item { EquityCurveCard(equityCurve, benchmark) }
 
         state.error?.let { item { ErrorBanner(message = it, onRetry = { }) } }
 
@@ -627,10 +637,14 @@ private fun PendingDividendDialog(
 fun HoldingsScreen(
     state: AppUiState,
     onOpenSecurity: (String) -> Unit,
+    /** 资产曲线（组合总资产）—— 老周 2026-10-08 从分析页迁到本页顶部 */
+    equityCurve: com.stocknote.data.repo.PortfolioRepository.EquityCurveResult? = null,
+    /** 基准（沪深300）逐日收盘 (date, close)；null = 不叠基准线 */
+    benchmark: List<Pair<String, Double>>? = null,
     modifier: Modifier = Modifier,
 ) {
     androidx.compose.runtime.CompositionLocalProvider(LocalPageTextScale provides PAGE_TEXT_SCALE) {
-        HoldingsScreenContent(state, onOpenSecurity, modifier)
+        HoldingsScreenContent(state, onOpenSecurity, equityCurve, benchmark, modifier)
     }
 }
 
